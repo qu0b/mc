@@ -235,6 +235,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_toolset_resolver_tests = b.addRunArtifact(toolset_resolver_tests);
 
+    // ---- Phase 6: core/agent_resolver ----
+    const agent_resolver_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/agent_resolver.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            .{ .name = "agent", .module = agent_schema_mod },
+            .{ .name = "toolset", .module = toolset_mod },
+        },
+    });
+
+    const agent_resolver_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/core/agent_resolver_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "agent", .module = agent_schema_mod },
+                .{ .name = "toolset", .module = toolset_mod },
+                .{ .name = "agent_resolver", .module = agent_resolver_mod },
+            },
+        }),
+    });
+    const run_agent_resolver_tests = b.addRunArtifact(agent_resolver_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
@@ -246,4 +273,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_agent_cli_tests.step);
     test_step.dependOn(&run_toolset_resolver_tests.step);
+    test_step.dependOn(&run_agent_resolver_tests.step);
 }
