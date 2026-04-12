@@ -301,6 +301,30 @@ pub fn build(b: *std.Build) void {
     });
     const run_add_compat_tests = b.addRunArtifact(add_compat_tests);
 
+    // ---- Phase 7: core/materialize ----
+    const materialize_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/materialize.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            .{ .name = "agent", .module = agent_schema_mod },
+        },
+    });
+    const materialize_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/core/materialize_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "agent", .module = agent_schema_mod },
+                .{ .name = "materialize", .module = materialize_mod },
+            },
+        }),
+    });
+    const run_materialize_tests = b.addRunArtifact(materialize_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
@@ -315,4 +339,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_agent_resolver_tests.step);
     test_step.dependOn(&run_compat_tests.step);
     test_step.dependOn(&run_add_compat_tests.step);
+    test_step.dependOn(&run_materialize_tests.step);
 }
