@@ -23,8 +23,8 @@ pub fn runWithArgs(allocator: std.mem.Allocator, argv: []const []const u8) !void
         .init => |opts| try init_cmd.execute(allocator, opts),
         .add => |opts| try add_cmd.execute(allocator, opts),
         .remove => |opts| try remove_cmd.execute(allocator, opts),
-        .install => try install_cmd.execute(allocator),
-        .update => try install_cmd.execute(allocator),
+        .install => |opts| try install_cmd.execute(allocator, opts),
+        .update => try install_cmd.execute(allocator, .{}),
         .list => |opts| try list_cmd.execute(allocator, opts),
         .search => |opts| try search_cmd.execute(allocator, opts),
         .info => |opts| try info_cmd.execute(allocator, opts),
@@ -88,6 +88,8 @@ fn printHelp() void {
         \\OPTIONS:
         \\  --help, -h                               Show this help
         \\  --version, -V                            Show version
+        \\  --ignore-compat, -I                      (add/install) skip compat checks,
+        \\                                           warn on violations instead of refusing
         \\
     ;
     w.writeAll(help);

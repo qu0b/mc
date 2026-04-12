@@ -1,11 +1,14 @@
 const std = @import("std");
 const compat = @import("../io/compat.zig");
+const args_mod = @import("args.zig");
 const render = @import("render.zig");
 const sandbox = @import("../core/sandbox.zig");
 const lockfile_mod = @import("../core/lockfile.zig");
 const cache_store = @import("../cache/store.zig");
+const core_compat = @import("../core/compat.zig");
+const diag = @import("diagnostic");
 
-pub fn execute(allocator: std.mem.Allocator) !void {
+pub fn execute(allocator: std.mem.Allocator, opts: args_mod.InstallOpts) !void {
     var w = compat.getStdout();
     const cwd = try compat.realpathAlloc(allocator, ".");
 
@@ -34,6 +37,41 @@ pub fn execute(allocator: std.mem.Allocator) !void {
     compat.makeDirAbsolute(plugins_dir) catch {};
 
     var store = try cache_store.ContentStore.init(allocator);
+
+    // ---- Pre-flight compat check across the whole batch ----
+    // Partial installs leave the sandbox in an ambiguous state, so we
+    // validate every package BEFORE we link a single one.
+    var diags = diag.Diagnostics.init(allocator);
+    defer diags.deinit();
+    const host = try core_compat.detectHostFacts(allocator);
+    var any_fail = false;
+
+    for (packages) |pkg| {
+        if (pkg.content_hash.len == 0) continue;
+        if (!store.has(allocator, pkg.content_hash)) continue;
+        const cache_path = try store.getPath(allocator, pkg.content_hash);
+        const ok = try core_compat.checkPluginDir(allocator, cache_path, pkg.name, host, &diags);
+        if (!ok) any_fail = true;
+    }
+
+    if (diags.count() > 0) {
+        if (any_fail and !opts.ignore_compat) {
+            try renderDiagnostics(allocator, &w, &diags);
+            render.err(&w, "Refusing install");
+            w.writeAll(" — compat violations (pass --ignore-compat to override)\n");
+            w.flush();
+            std.process.exit(1);
+        }
+        if (opts.ignore_compat and any_fail) {
+            core_compat.downgradeErrorsToWarnings(&diags);
+        }
+        try renderDiagnostics(allocator, &w, &diags);
+        if (opts.ignore_compat and any_fail) {
+            render.warn(&w, "ignored compat violations (--ignore-compat)\n");
+        }
+    }
+
+    // ---- Link stage ----
     var installed: usize = 0;
     var skipped: usize = 0;
 
@@ -65,4 +103,15 @@ pub fn execute(allocator: std.mem.Allocator) !void {
     }
     w.writeAll("\n");
     w.flush();
+}
+
+fn renderDiagnostics(
+    allocator: std.mem.Allocator,
+    w: *compat.OutWriter,
+    diags: *const diag.Diagnostics,
+) !void {
+    var buf: std.ArrayList(u8) = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    try diags.render(buf.writer());
+    w.writeAll(buf.items);
 }
