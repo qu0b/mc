@@ -29,6 +29,12 @@ pub const FieldSpec = struct {
     /// For `.string` fields: optional whitelist of allowed values.
     enum_values: ?[]const []const u8 = null,
 
+    /// For `.object` fields used as a map (arbitrary keys): schema each VALUE
+    /// (which must itself be an object) must satisfy. Mutually exclusive with
+    /// `nested`; when set, unknown-key checks are skipped for this object and
+    /// each present value is validated against `map_value_nested`.
+    map_value_nested: ?[]const FieldSpec = null,
+
     /// Optional post-type-check validator; invoked only if type matches.
     validate: ?*const fn (
         value: std.json.Value,
@@ -149,6 +155,20 @@ fn validateValue(
         .object => {
             if (spec.nested) |nested| {
                 try validateObject(allocator, file, path, value.object, nested, diags);
+            } else if (spec.map_value_nested) |value_schema| {
+                var it = value.object.iterator();
+                while (it.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    const v = entry.value_ptr.*;
+                    const child_path = try joinPath(allocator, path, key);
+                    defer allocator.free(child_path);
+                    if (v != .object) {
+                        const owned = try diags.arena.allocator().dupe(u8, child_path);
+                        try diags.err(file, owned, "expected object, got {s}", .{typeName(v)});
+                        continue;
+                    }
+                    try validateObject(allocator, file, child_path, v.object, value_schema, diags);
+                }
             }
         },
         .array => {
