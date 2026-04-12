@@ -25,8 +25,16 @@ pub const Command = union(enum) {
     marketplace: MarketplaceCmd,
     generate: GenerateCmd,
     agent: AgentSub,
+    run: RunOpts,
     help: void,
     version: void,
+};
+
+pub const RunOpts = struct {
+    agent_name: []const u8,
+    dry_run: bool = false,
+    /// Args collected after `--`, passed through to `pi`.
+    extra_args: []const []const u8 = &.{},
 };
 
 pub const InitOpts = struct {
@@ -182,6 +190,8 @@ pub fn parse(args_iter: anytype) !Command {
         return parseGenerate(args_iter);
     } else if (std.mem.eql(u8, cmd, "agent")) {
         return parseAgent(args_iter);
+    } else if (std.mem.eql(u8, cmd, "run")) {
+        return parseRun(args_iter);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V")) {
         return .version;
     } else if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
@@ -236,6 +246,39 @@ fn parseAgent(args_iter: anytype) !Command {
     }
 
     return error.UnknownSubcommand;
+}
+
+fn parseRun(args_iter: anytype) !Command {
+    // Collect all remaining args; parsing order matters for the `--` split.
+    var remaining: std.ArrayList([]const u8) = std.ArrayList([]const u8).init(std.heap.page_allocator);
+    // remaining lives for the lifetime of the program (main).  Reuse page_allocator
+    // since Command owns borrowed slices from the original argv anyway.
+    while (args_iter.next()) |a| try remaining.append(a);
+    const items = remaining.items;
+
+    var name: ?[]const u8 = null;
+    var dry_run = false;
+    var extra: []const []const u8 = &.{};
+
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        const arg = items[i];
+        if (std.mem.eql(u8, arg, "--")) {
+            extra = items[i + 1 ..];
+            break;
+        } else if (std.mem.eql(u8, arg, "--dry-run")) {
+            dry_run = true;
+        } else if (!std.mem.startsWith(u8, arg, "-") and name == null) {
+            name = arg;
+        }
+    }
+
+    const agent_name = name orelse return error.MissingArgument;
+    return .{ .run = .{
+        .agent_name = agent_name,
+        .dry_run = dry_run,
+        .extra_args = extra,
+    } };
 }
 
 fn parseGenerate(args_iter: anytype) !Command {

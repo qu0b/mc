@@ -12,6 +12,7 @@ const info_cmd = @import("info.zig");
 const marketplace_cmd = @import("marketplace.zig");
 const generate_cmd = @import("generate.zig");
 const agent_cmd = @import("agent.zig");
+const run_cmd = @import("run.zig");
 
 const VERSION = "0.1.0";
 
@@ -31,6 +32,11 @@ pub fn runWithArgs(allocator: std.mem.Allocator, argv: []const []const u8) !void
         .marketplace => |sub| try marketplace_cmd.execute(allocator, sub),
         .generate => |sub| try generate_cmd.execute(allocator, sub),
         .agent => |sub| try agent_cmd.execute(allocator, sub),
+        .run => |opts| try run_cmd.execute(allocator, .{
+            .agent_name = opts.agent_name,
+            .dry_run = opts.dry_run,
+            .extra_args = opts.extra_args,
+        }),
         .version => printVersion(),
         .help => printHelp(),
     }
@@ -80,6 +86,9 @@ fn printHelp() void {
         \\
         \\AGENT MANAGEMENT:
         \\  agent new <name> [--model M] [--provider P] [--toolset T]   Create a new agent
+        \\
+        \\AGENT EXECUTION:
+        \\  run <agent> [--dry-run] [-- <pi args>]     Run a named agent
         \\
         \\ALIASES:
         \\  rm = remove, ls = list, s = search, mp = marketplace, gen = generate
