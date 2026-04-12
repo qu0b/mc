@@ -356,6 +356,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_validate_cli_tests = b.addRunArtifact(validate_cli_tests);
 
+    // ---- Phase 8: cli/run ----
+    const run_cmd_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/run.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            .{ .name = "agent", .module = agent_schema_mod },
+            .{ .name = "toolset", .module = toolset_mod },
+            .{ .name = "agent_resolver", .module = agent_resolver_mod },
+            .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
+            .{ .name = "materialize", .module = materialize_mod },
+        },
+    });
+    const run_cmd_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli/run_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "run", .module = run_cmd_mod },
+            },
+        }),
+    });
+    const run_run_cmd_tests = b.addRunArtifact(run_cmd_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
@@ -372,4 +399,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_add_compat_tests.step);
     test_step.dependOn(&run_materialize_tests.step);
     test_step.dependOn(&run_validate_cli_tests.step);
+    test_step.dependOn(&run_run_cmd_tests.step);
 }
