@@ -9,6 +9,9 @@ pub const io = struct {
     pub const writer = @import("io/writer.zig");
     pub const hash = @import("io/hash.zig");
     pub const semver = @import("io/semver.zig");
+    // diagnostic / json_strict are wired into build.zig as separate test
+    // modules (they import each other by module name, which the root.zig
+    // test module does not provide).
 };
 
 pub const schema = struct {
