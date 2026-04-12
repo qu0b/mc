@@ -107,7 +107,7 @@ pub fn build(b: *std.Build) void {
     const run_json_strict_tests = b.addRunArtifact(json_strict_tests);
 
     // ---- Phase 3 schema modules ----
-    const agent_mod = b.createModule(.{
+    const agent_schema_mod = b.createModule(.{
         .root_source_file = b.path("src/schema/agent.zig"),
         .target = target,
         .optimize = optimize,
@@ -132,18 +132,18 @@ pub fn build(b: *std.Build) void {
         .imports = core_imports,
     });
 
-    const agent_tests = b.addTest(.{
+    const agent_schema_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/schema/agent_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "diagnostic", .module = diagnostic_mod },
-                .{ .name = "agent", .module = agent_mod },
+                .{ .name = "agent", .module = agent_schema_mod },
             },
         }),
     });
-    const run_agent_tests = b.addRunArtifact(agent_tests);
+    const run_agent_schema_tests = b.addRunArtifact(agent_schema_tests);
 
     const plugin_strict_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -184,13 +184,40 @@ pub fn build(b: *std.Build) void {
     });
     const run_library_tests = b.addRunArtifact(library_tests);
 
+    // ---- Phase 11: agent CLI scaffolder ----
+    const args_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/args.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const agent_cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/agent.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "args", .module = args_mod },
+        },
+    });
+    const agent_cli_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli/agent_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "agent", .module = agent_cli_mod },
+            },
+        }),
+    });
+    const run_agent_cli_tests = b.addRunArtifact(agent_cli_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
     test_step.dependOn(&run_diagnostic_tests.step);
     test_step.dependOn(&run_json_strict_tests.step);
-    test_step.dependOn(&run_agent_tests.step);
+    test_step.dependOn(&run_agent_schema_tests.step);
     test_step.dependOn(&run_plugin_strict_tests.step);
     test_step.dependOn(&run_toolset_tests.step);
     test_step.dependOn(&run_library_tests.step);
+    test_step.dependOn(&run_agent_cli_tests.step);
 }

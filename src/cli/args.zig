@@ -24,6 +24,7 @@ pub const Command = union(enum) {
     info: InfoOpts,
     marketplace: MarketplaceCmd,
     generate: GenerateCmd,
+    agent: AgentSub,
     help: void,
     version: void,
 };
@@ -95,6 +96,18 @@ pub const GenerateBeesOpts = struct {
     role: ?[]const u8 = null,
 };
 
+pub const AgentSub = union(enum) {
+    new: AgentNewOpts,
+    // TODO(phase-later): show, validate
+};
+
+pub const AgentNewOpts = struct {
+    name: []const u8,
+    model: ?[]const u8 = null,
+    provider: ?[]const u8 = null,
+    toolset: ?[]const u8 = null,
+};
+
 pub fn parse(args_iter: anytype) !Command {
     // Skip program name
     _ = args_iter.next();
@@ -154,6 +167,8 @@ pub fn parse(args_iter: anytype) !Command {
         return parseMarketplace(args_iter);
     } else if (std.mem.eql(u8, cmd, "generate") or std.mem.eql(u8, cmd, "gen")) {
         return parseGenerate(args_iter);
+    } else if (std.mem.eql(u8, cmd, "agent")) {
+        return parseAgent(args_iter);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V")) {
         return .version;
     } else if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
@@ -187,6 +202,27 @@ fn parseMarketplace(args_iter: anytype) !Command {
     }
 
     return .help;
+}
+
+fn parseAgent(args_iter: anytype) !Command {
+    const sub = args_iter.next() orelse return error.MissingArgument;
+
+    if (std.mem.eql(u8, sub, "new")) {
+        const name = args_iter.next() orelse return error.MissingArgument;
+        var opts = AgentNewOpts{ .name = name };
+        while (args_iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--model")) {
+                opts.model = args_iter.next();
+            } else if (std.mem.eql(u8, arg, "--provider")) {
+                opts.provider = args_iter.next();
+            } else if (std.mem.eql(u8, arg, "--toolset")) {
+                opts.toolset = args_iter.next();
+            }
+        }
+        return .{ .agent = .{ .new = opts } };
+    }
+
+    return error.UnknownSubcommand;
 }
 
 fn parseGenerate(args_iter: anytype) !Command {
