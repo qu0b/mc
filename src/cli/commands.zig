@@ -12,6 +12,7 @@ const info_cmd = @import("info.zig");
 const marketplace_cmd = @import("marketplace.zig");
 const generate_cmd = @import("generate.zig");
 const agent_cmd = @import("agent.zig");
+const validate_cmd = @import("validate.zig");
 
 const VERSION = "0.1.0";
 
@@ -31,6 +32,7 @@ pub fn runWithArgs(allocator: std.mem.Allocator, argv: []const []const u8) !void
         .marketplace => |sub| try marketplace_cmd.execute(allocator, sub),
         .generate => |sub| try generate_cmd.execute(allocator, sub),
         .agent => |sub| try agent_cmd.execute(allocator, sub),
+        .validate => |opts| try validate_cmd.execute(allocator, opts),
         .version => printVersion(),
         .help => printHelp(),
     }
@@ -63,6 +65,7 @@ fn printHelp() void {
         \\  list [--json]                            List installed plugins
         \\  search <query> [-m <marketplace>]        Search marketplaces
         \\  info <pkg>                               Show plugin details
+        \\  validate                                 Check all config files + cross-refs; exit 1 on errors
         \\
         \\MARKETPLACE MANAGEMENT:
         \\  marketplace add <name> --github <repo>   Register a marketplace

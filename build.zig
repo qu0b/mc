@@ -301,6 +301,37 @@ pub fn build(b: *std.Build) void {
     });
     const run_add_compat_tests = b.addRunArtifact(add_compat_tests);
 
+    // ---- Phase 10: cli/validate ----
+    const validate_cli_imports = [_]std.Build.Module.Import{
+        .{ .name = "diagnostic", .module = diagnostic_mod },
+        .{ .name = "plugin", .module = plugin_strict_mod },
+        .{ .name = "agent", .module = agent_schema_mod },
+        .{ .name = "toolset", .module = toolset_mod },
+        .{ .name = "library", .module = library_mod },
+        .{ .name = "agent_resolver", .module = agent_resolver_mod },
+        .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
+        .{ .name = "compat", .module = core_compat_mod },
+    };
+    const validate_cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/validate.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &validate_cli_imports,
+    });
+
+    const validate_cli_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli/validate_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "validate", .module = validate_cli_mod },
+            },
+        }),
+    });
+    const run_validate_cli_tests = b.addRunArtifact(validate_cli_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
@@ -315,4 +346,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_agent_resolver_tests.step);
     test_step.dependOn(&run_compat_tests.step);
     test_step.dependOn(&run_add_compat_tests.step);
+    test_step.dependOn(&run_validate_cli_tests.step);
 }
