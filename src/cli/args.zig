@@ -25,8 +25,13 @@ pub const Command = union(enum) {
     marketplace: MarketplaceCmd,
     generate: GenerateCmd,
     agent: AgentSub,
+    validate: ValidateOpts,
     help: void,
     version: void,
+};
+
+pub const ValidateOpts = struct {
+    // Reserved for future flags.
 };
 
 pub const InitOpts = struct {
@@ -182,6 +187,8 @@ pub fn parse(args_iter: anytype) !Command {
         return parseGenerate(args_iter);
     } else if (std.mem.eql(u8, cmd, "agent")) {
         return parseAgent(args_iter);
+    } else if (std.mem.eql(u8, cmd, "validate")) {
+        return .{ .validate = .{} };
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V")) {
         return .version;
     } else if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
