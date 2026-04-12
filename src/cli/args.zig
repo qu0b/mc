@@ -17,7 +17,7 @@ pub const Command = union(enum) {
     init: InitOpts,
     add: AddOpts,
     remove: RemoveOpts,
-    install: void,
+    install: InstallOpts,
     update: UpdateOpts,
     list: ListOpts,
     search: SearchOpts,
@@ -38,6 +38,11 @@ pub const AddOpts = struct {
     version: ?[]const u8 = null,
     url: ?[]const u8 = null,
     path: ?[]const u8 = null,
+    ignore_compat: bool = false,
+};
+
+pub const InstallOpts = struct {
+    ignore_compat: bool = false,
 };
 
 pub const RemoveOpts = struct {
@@ -120,6 +125,8 @@ pub fn parse(args_iter: anytype) !Command {
                 opts.url = args_iter.next();
             } else if (std.mem.eql(u8, arg, "--path")) {
                 opts.path = args_iter.next();
+            } else if (std.mem.eql(u8, arg, "--ignore-compat") or std.mem.eql(u8, arg, "-I")) {
+                opts.ignore_compat = true;
             } else if (!std.mem.startsWith(u8, arg, "-")) {
                 opts.package = arg;
             }
@@ -129,7 +136,13 @@ pub fn parse(args_iter: anytype) !Command {
         const pkg = args_iter.next() orelse return error.MissingArgument;
         return .{ .remove = .{ .package = pkg } };
     } else if (std.mem.eql(u8, cmd, "install") or std.mem.eql(u8, cmd, "i")) {
-        return .install;
+        var opts = InstallOpts{};
+        while (args_iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--ignore-compat") or std.mem.eql(u8, arg, "-I")) {
+                opts.ignore_compat = true;
+            }
+        }
+        return .{ .install = opts };
     } else if (std.mem.eql(u8, cmd, "update")) {
         return .{ .update = .{ .package = args_iter.next() } };
     } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "ls")) {

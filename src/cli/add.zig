@@ -12,6 +12,8 @@ const git_mod = @import("../fetch/git.zig");
 const github_mod = @import("../fetch/github.zig");
 const cache_store = @import("../cache/store.zig");
 const hash_mod = @import("../io/hash.zig");
+const core_compat = @import("../core/compat.zig");
+const diag = @import("diagnostic");
 
 pub fn execute(allocator: std.mem.Allocator, opts: args_mod.AddOpts) !void {
     var w = compat.getStdout();
@@ -63,6 +65,14 @@ pub fn execute(allocator: std.mem.Allocator, opts: args_mod.AddOpts) !void {
         plugins_dir,
     );
 
+    // Compat check on the just-linked plugin directory. If it fails, unlink
+    // and abort unless the user passed --ignore-compat.
+    const installed_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ plugins_dir, resolved.name });
+    if (!try runCompatCheck(allocator, &w, installed_dir, resolved.name, opts.ignore_compat)) {
+        compat.deleteTreeAbsolute(installed_dir);
+        std.process.exit(1);
+    }
+
     // Update lock file
     const lock = lockfile_mod.readLockFile(allocator, cwd) catch lockfile_mod.LockFile{};
     const existing = lockfile_mod.getLockedPackages(allocator, lock) catch &.{};
@@ -85,6 +95,47 @@ pub fn execute(allocator: std.mem.Allocator, opts: args_mod.AddOpts) !void {
     if (resolved.entry.version) |v| w.print("@{s}", .{v});
     w.writeAll("\n");
     w.flush();
+}
+
+/// Run compat check on an installed plugin dir. Returns true if install
+/// may proceed (either passed, or --ignore-compat downgraded failures to
+/// warnings). On hard failure emits diagnostics and returns false.
+fn runCompatCheck(
+    allocator: std.mem.Allocator,
+    w: *compat.OutWriter,
+    plugin_dir: []const u8,
+    plugin_name: []const u8,
+    ignore_compat: bool,
+) !bool {
+    var diags = diag.Diagnostics.init(allocator);
+    defer diags.deinit();
+
+    const host = try core_compat.detectHostFacts(allocator);
+    const ok = try core_compat.checkPluginDir(allocator, plugin_dir, plugin_name, host, &diags);
+
+    if (diags.count() == 0) return true;
+
+    if (ignore_compat and !ok) {
+        core_compat.downgradeErrorsToWarnings(&diags);
+        try renderDiagnostics(allocator, w, &diags);
+        render.warn(w, "ignored compat violations (--ignore-compat)\n");
+        w.flush();
+        return true;
+    }
+    try renderDiagnostics(allocator, w, &diags);
+    w.flush();
+    return ok;
+}
+
+fn renderDiagnostics(
+    allocator: std.mem.Allocator,
+    w: *compat.OutWriter,
+    diags: *const diag.Diagnostics,
+) !void {
+    var buf: std.ArrayList(u8) = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    try diags.render(buf.writer());
+    w.writeAll(buf.items);
 }
 
 fn addDirect(
@@ -117,6 +168,11 @@ fn addDirect(
         name = if (std.mem.endsWith(u8, base, ".git")) base[0 .. base.len - 4] else base;
         source_type = "url";
     } else return;
+
+    // Compat check on the source directory BEFORE linking into the sandbox.
+    if (!try runCompatCheck(allocator, w, source_dir, name, opts.ignore_compat)) {
+        std.process.exit(1);
+    }
 
     const content_hash = try store.store(allocator, source_dir);
     const target = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ plugins_dir, name });

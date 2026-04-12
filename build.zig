@@ -184,6 +184,48 @@ pub fn build(b: *std.Build) void {
     });
     const run_library_tests = b.addRunArtifact(library_tests);
 
+    // ---- Phase 4 compat module ----
+    const core_compat_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/compat.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            .{ .name = "semver", .module = semver_mod },
+            .{ .name = "plugin", .module = plugin_strict_mod },
+        },
+    });
+
+    const compat_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/core/compat_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "semver", .module = semver_mod },
+                .{ .name = "plugin", .module = plugin_strict_mod },
+                .{ .name = "compat", .module = core_compat_mod },
+            },
+        }),
+    });
+    const run_compat_tests = b.addRunArtifact(compat_tests);
+
+    const add_compat_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli/add_compat_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "semver", .module = semver_mod },
+                .{ .name = "plugin", .module = plugin_strict_mod },
+                .{ .name = "compat", .module = core_compat_mod },
+            },
+        }),
+    });
+    const run_add_compat_tests = b.addRunArtifact(add_compat_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
@@ -193,4 +235,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_plugin_strict_tests.step);
     test_step.dependOn(&run_toolset_tests.step);
     test_step.dependOn(&run_library_tests.step);
+    test_step.dependOn(&run_compat_tests.step);
+    test_step.dependOn(&run_add_compat_tests.step);
 }
