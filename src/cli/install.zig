@@ -1,0 +1,68 @@
+const std = @import("std");
+const compat = @import("../io/compat.zig");
+const render = @import("render.zig");
+const sandbox = @import("../core/sandbox.zig");
+const lockfile_mod = @import("../core/lockfile.zig");
+const cache_store = @import("../cache/store.zig");
+
+pub fn execute(allocator: std.mem.Allocator) !void {
+    var w = compat.getStdout();
+    const cwd = try compat.realpathAlloc(allocator, ".");
+
+    if (!sandbox.isSandbox(allocator, cwd)) {
+        render.err(&w, "Not an mc project");
+        w.writeAll(". Run 'mc init' first.\n");
+        w.flush();
+        return;
+    }
+
+    const lock = lockfile_mod.readLockFile(allocator, cwd) catch {
+        render.warn(&w, "No lock file found");
+        w.writeAll(". Nothing to install.\n");
+        w.flush();
+        return;
+    };
+
+    const packages = try lockfile_mod.getLockedPackages(allocator, lock);
+    if (packages.len == 0) {
+        w.writeAll("No packages in lock file.\n");
+        w.flush();
+        return;
+    }
+
+    const plugins_dir = try sandbox.getPluginsDir(allocator, cwd);
+    compat.makeDirAbsolute(plugins_dir) catch {};
+
+    var store = try cache_store.ContentStore.init(allocator);
+    var installed: usize = 0;
+    var skipped: usize = 0;
+
+    for (packages) |pkg| {
+        if (pkg.content_hash.len == 0) {
+            skipped += 1;
+            continue;
+        }
+
+        // Check if in cache
+        if (store.has(allocator, pkg.content_hash)) {
+            const target = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ plugins_dir, pkg.name });
+            store.link(allocator, pkg.content_hash, target) catch {
+                skipped += 1;
+                continue;
+            };
+            installed += 1;
+        } else {
+            render.warn(&w, "Cache miss");
+            w.print(" for {s} (hash: {s}). Run 'mc add {s}' to re-fetch.\n", .{ pkg.name, pkg.content_hash, pkg.name });
+            skipped += 1;
+        }
+    }
+
+    render.success(&w, "Installed");
+    w.print(" {d} packages", .{installed});
+    if (skipped > 0) {
+        w.print(" ({d} skipped)", .{skipped});
+    }
+    w.writeAll("\n");
+    w.flush();
+}
