@@ -210,6 +210,31 @@ pub fn build(b: *std.Build) void {
     });
     const run_agent_cli_tests = b.addRunArtifact(agent_cli_tests);
 
+    // ---- Phase 5: core/toolset_resolver ----
+    const toolset_resolver_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/toolset_resolver.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            .{ .name = "toolset", .module = toolset_mod },
+        },
+    });
+
+    const toolset_resolver_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/core/toolset_resolver_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "toolset", .module = toolset_mod },
+                .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
+            },
+        }),
+    });
+    const run_toolset_resolver_tests = b.addRunArtifact(toolset_resolver_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
@@ -220,4 +245,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_toolset_tests.step);
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_agent_cli_tests.step);
+    test_step.dependOn(&run_toolset_resolver_tests.step);
 }
