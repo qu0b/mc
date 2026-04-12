@@ -94,9 +94,36 @@ pub fn build(b: *std.Build) void {
     });
     const run_json_strict_tests = b.addRunArtifact(json_strict_tests);
 
+    // Phase 11: agent scaffolder tests.
+    const args_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/args.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const agent_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/agent.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "args", .module = args_mod },
+        },
+    });
+    const agent_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli/agent_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "agent", .module = agent_mod },
+            },
+        }),
+    });
+    const run_agent_tests = b.addRunArtifact(agent_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
     test_step.dependOn(&run_diagnostic_tests.step);
     test_step.dependOn(&run_json_strict_tests.step);
+    test_step.dependOn(&run_agent_tests.step);
 }
