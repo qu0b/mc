@@ -210,6 +210,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_agent_cli_tests = b.addRunArtifact(agent_cli_tests);
 
+    const agent_show_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/cli/agent_show_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "agent", .module = agent_cli_mod },
+            },
+        }),
+    });
+    const run_agent_show_tests = b.addRunArtifact(agent_show_tests);
+
     // ---- Phase 5: core/toolset_resolver ----
     const toolset_resolver_mod = b.createModule(.{
         .root_source_file = b.path("src/core/toolset_resolver.zig"),
@@ -335,6 +347,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_toolset_tests.step);
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_agent_cli_tests.step);
+    test_step.dependOn(&run_agent_show_tests.step);
     test_step.dependOn(&run_toolset_resolver_tests.step);
     test_step.dependOn(&run_agent_resolver_tests.step);
     test_step.dependOn(&run_compat_tests.step);

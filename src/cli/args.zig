@@ -103,7 +103,8 @@ pub const GenerateBeesOpts = struct {
 
 pub const AgentSub = union(enum) {
     new: AgentNewOpts,
-    // TODO(phase-later): show, validate
+    show: AgentShowOpts,
+    // TODO(phase-later): validate
 };
 
 pub const AgentNewOpts = struct {
@@ -111,6 +112,11 @@ pub const AgentNewOpts = struct {
     model: ?[]const u8 = null,
     provider: ?[]const u8 = null,
     toolset: ?[]const u8 = null,
+};
+
+pub const AgentShowOpts = struct {
+    name: []const u8,
+    // TODO(phase-later): --json, --files-only, etc.
 };
 
 pub fn parse(args_iter: anytype) !Command {
@@ -233,6 +239,9 @@ fn parseAgent(args_iter: anytype) !Command {
             }
         }
         return .{ .agent = .{ .new = opts } };
+    } else if (std.mem.eql(u8, sub, "show")) {
+        const name = args_iter.next() orelse return error.MissingArgument;
+        return .{ .agent = .{ .show = .{ .name = name } } };
     }
 
     return error.UnknownSubcommand;
