@@ -8,10 +8,9 @@ pub const io = struct {
     pub const json = @import("io/json.zig");
     pub const writer = @import("io/writer.zig");
     pub const hash = @import("io/hash.zig");
-    pub const semver = @import("io/semver.zig");
-    // diagnostic / json_strict are wired into build.zig as separate test
-    // modules (they import each other by module name, which the root.zig
-    // test module does not provide).
+    pub const semver = @import("semver");
+    pub const diagnostic = @import("diagnostic");
+    pub const json_strict = @import("json_strict");
 };
 
 pub const schema = struct {
