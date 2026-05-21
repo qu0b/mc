@@ -14,6 +14,7 @@ const std = @import("std");
 const diag = @import("diagnostic");
 const semver = @import("semver");
 const plugin_schema = @import("plugin");
+const io_compat = @import("iocompat");
 
 /// The mc version baked into this binary. Must match `VERSION` in
 /// `src/cli/commands.zig` — duplicated because `commands.zig` is a CLI
@@ -48,26 +49,12 @@ pub fn detectHostFacts(allocator: std.mem.Allocator) !HostFacts {
 /// success, otherwise null. All errors are swallowed — the absence of
 /// `pi` is a normal condition, not a failure.
 fn detectPiVersion(allocator: std.mem.Allocator) ?[]const u8 {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ "pi", "--version" },
-        .max_output_bytes = 4096,
-    }) catch return null;
-    defer allocator.free(result.stderr);
-    // `result.stdout` ownership is leaked into the returned slice on
-    // success; on failure we free it.
-    const ok = switch (result.term) {
-        .Exited => |c| c == 0,
-        else => false,
-    };
-    if (!ok) {
-        allocator.free(result.stdout);
-        return null;
-    }
-    return extractSemverToken(allocator, result.stdout) orelse {
-        allocator.free(result.stdout);
-        return null;
-    };
+    // Best-effort probe; any failure (missing binary, non-zero exit,
+    // unparseable output) yields null. `result.out` is left to the caller's
+    // arena/GPA — a single startup string, intentionally not freed here.
+    const result = io_compat.runCommandOutput(allocator, &.{ "pi", "--version" }) catch return null;
+    if (result.code != 0) return null;
+    return extractSemverToken(allocator, result.out);
 }
 
 /// Scan `text` for the first `D.D.D[...]` token that `parseVersion`
@@ -218,7 +205,7 @@ pub fn locatePluginJson(allocator: std.mem.Allocator, plugin_dir: []const u8) !?
     };
     for (candidates) |rel| {
         const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ plugin_dir, rel });
-        std.fs.accessAbsolute(full, .{}) catch {
+        io_compat.accessAbsolute(full) catch {
             allocator.free(full);
             continue;
         };
@@ -241,7 +228,7 @@ pub fn checkPluginDir(
     diags: *diag.Diagnostics,
 ) !bool {
     const pj_path = (try locatePluginJson(allocator, plugin_dir)) orelse return true;
-    const src = std.fs.cwd().readFileAlloc(allocator, pj_path, 1 << 20) catch return true;
+    const src = io_compat.readFile(allocator, pj_path) catch return true;
     const parsed = try plugin_schema.parsePluginStrict(allocator, pj_path, src, diags);
     const p = parsed orelse return !diags.hasErrors();
     const c = p.compat orelse return true;

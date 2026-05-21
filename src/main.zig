@@ -1,6 +1,6 @@
 const std = @import("std");
 const commands = @import("cli/commands.zig");
-const compat = @import("io/compat.zig");
+const compat = @import("iocompat");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

@@ -19,6 +19,7 @@ const library_schema = @import("library");
 const agent_resolver = @import("agent_resolver");
 const toolset_resolver = @import("toolset_resolver");
 const core_compat = @import("compat");
+const io_compat = @import("iocompat");
 
 pub const ValidateOpts = struct {
     // Reserved for future flags (e.g. --json, --strict). No v1 options.
@@ -45,22 +46,22 @@ pub const ValidateResult = struct {
 /// the two modules.
 pub fn execute(allocator: std.mem.Allocator, opts: anytype) !void {
     _ = opts;
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.process.getCwd(&cwd_buf);
-    const cwd_owned = try allocator.dupe(u8, cwd);
+    const cwd_owned = try io_compat.getCwdAlloc(allocator);
     defer allocator.free(cwd_owned);
 
     var result = try runAt(allocator, cwd_owned);
     defer result.deinit();
 
     if (!result.is_sandbox) {
-        const stderr = std.io.getStdErr().writer();
-        try stderr.writeAll("Not an mc project. Run 'mc init' first.\n");
+        var ew = io_compat.getStderr();
+        ew.writeAll("Not an mc project. Run 'mc init' first.\n");
+        ew.flush();
         return;
     }
 
-    const stdout = std.io.getStdOut().writer();
-    try result.diags.render(stdout);
+    var ow = io_compat.getStdout();
+    try result.diags.render(&ow.file_writer.interface);
+    ow.flush();
 
     if (result.hasErrors()) std.process.exit(1);
 }
@@ -102,7 +103,7 @@ pub fn runAt(allocator: std.mem.Allocator, project_root: []const u8) !ValidateRe
 fn isSandboxAt(allocator: std.mem.Allocator, project_root: []const u8) !bool {
     const marker = try std.fmt.allocPrint(allocator, "{s}/.mc/mc.json", .{project_root});
     defer allocator.free(marker);
-    std.fs.accessAbsolute(marker, .{}) catch return false;
+    io_compat.accessAbsolute(marker) catch return false;
     return true;
 }
 
@@ -120,7 +121,7 @@ fn mergeDiagnostics(parent: *diag.Diagnostics, child: *const diag.Diagnostics) !
         const file_copy = try parent_arena.dupe(u8, it.file);
         const path_copy = try parent_arena.dupe(u8, it.path);
         const msg_copy = try parent_arena.dupe(u8, it.message);
-        try parent.items.append(.{
+        try parent.items.append(parent.allocator, .{
             .file = file_copy,
             .path = path_copy,
             .line = it.line,
@@ -141,15 +142,15 @@ fn validatePlugins(
 ) !void {
     const plugins_dir_abs = try std.fmt.allocPrint(aa, "{s}/.mc/plugins", .{project_root});
 
-    var dir = std.fs.openDirAbsolute(plugins_dir_abs, .{ .iterate = true }) catch return;
-    defer dir.close();
+    var dir = io_compat.openDirAbsolute(plugins_dir_abs) catch return;
+    defer dir.close(io_compat.getIo());
 
     // detectHostFacts may shell out to `pi`; use the GPA because pi_version
     // is allocated with `allocator.dupe` inside the helper.
     const host = try core_compat.detectHostFacts(allocator);
     defer if (host.pi_version) |pv| allocator.free(pv);
 
-    var it = dir.iterate();
+    var it = io_compat.iterateDir(dir);
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
         try validateOnePlugin(allocator, aa, project_root, entry.name, host, diags);
@@ -172,7 +173,7 @@ fn validateOnePlugin(
             "{s}/.mc/plugins/{s}/{s}",
             .{ project_root, cap_name, rel },
         );
-        const src = std.fs.cwd().readFileAlloc(aa, abs, 1 << 20) catch continue;
+        const src = io_compat.readFile(aa, abs) catch continue;
 
         const label = try std.fmt.allocPrint(
             aa,
@@ -250,17 +251,17 @@ fn findToolsetsSource(
     const candidates = [_][]const u8{ "toolsets.json", ".mc/toolsets.json" };
     for (candidates) |rel| {
         const abs = try std.fmt.allocPrint(aa, "{s}/{s}", .{ project_root, rel });
-        if (std.fs.cwd().readFileAlloc(aa, abs, 1 << 20)) |data| {
+        if (io_compat.readFile(aa, abs)) |data| {
             const label = try diags.arena.allocator().dupe(u8, rel);
             return .{ .rel_file = label, .contents = data };
         } else |_| {}
     }
 
     const plugins_dir_abs = try std.fmt.allocPrint(aa, "{s}/.mc/plugins", .{project_root});
-    var plugins_dir = std.fs.openDirAbsolute(plugins_dir_abs, .{ .iterate = true }) catch return null;
-    defer plugins_dir.close();
+    var plugins_dir = io_compat.openDirAbsolute(plugins_dir_abs) catch return null;
+    defer plugins_dir.close(io_compat.getIo());
 
-    var it = plugins_dir.iterate();
+    var it = io_compat.iterateDir(plugins_dir);
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
         const abs = try std.fmt.allocPrint(
@@ -268,7 +269,7 @@ fn findToolsetsSource(
             "{s}/{s}/toolsets.json",
             .{ plugins_dir_abs, entry.name },
         );
-        if (std.fs.cwd().readFileAlloc(aa, abs, 1 << 20)) |data| {
+        if (io_compat.readFile(aa, abs)) |data| {
             const label = try std.fmt.allocPrint(
                 diags.arena.allocator(),
                 ".mc/plugins/{s}/toolsets.json",
@@ -289,7 +290,7 @@ fn validateMarketplace(
     diags: *diag.Diagnostics,
 ) !void {
     const abs = try std.fmt.allocPrint(aa, "{s}/marketplace.json", .{project_root});
-    const src = std.fs.cwd().readFileAlloc(aa, abs, 1 << 20) catch return; // absent is OK
+    const src = io_compat.readFile(aa, abs) catch return; // absent is OK
     const label = "marketplace.json";
 
     var local = diag.Diagnostics.init(allocator);
@@ -307,10 +308,10 @@ fn validateAgents(
     diags: *diag.Diagnostics,
 ) !void {
     const agents_dir_abs = try std.fmt.allocPrint(aa, "{s}/agents", .{project_root});
-    var agents_dir = std.fs.openDirAbsolute(agents_dir_abs, .{ .iterate = true }) catch return;
-    defer agents_dir.close();
+    var agents_dir = io_compat.openDirAbsolute(agents_dir_abs) catch return;
+    defer agents_dir.close(io_compat.getIo());
 
-    var it = agents_dir.iterate();
+    var it = io_compat.iterateDir(agents_dir);
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
         // Isolated diagnostics per agent so a prior file's errors don't

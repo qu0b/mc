@@ -59,18 +59,18 @@ pub fn resolve(
         .registry = registry,
         .file = file,
         .diags = diags,
-        .out = std.ArrayList([]const u8).init(allocator),
+        .out = .empty,
         .seen_tools = std.StringHashMap(void).init(allocator),
         .visiting = std.StringHashMap(void).init(allocator),
         .visited = std.StringHashMap(void).init(allocator),
-        .path_stack = std.ArrayList([]const u8).init(allocator),
+        .path_stack = .empty,
         .unknown_include_seen = false,
     };
     defer state.seen_tools.deinit();
     defer state.visiting.deinit();
     defer state.visited.deinit();
-    defer state.path_stack.deinit();
-    errdefer state.out.deinit();
+    defer state.path_stack.deinit(allocator);
+    errdefer state.out.deinit(allocator);
 
     try dfs(&state, name);
 
@@ -79,7 +79,7 @@ pub fn resolve(
         return ResolveError.UnknownToolset;
     }
 
-    return state.out.toOwnedSlice();
+    return state.out.toOwnedSlice(allocator);
 }
 
 /// Resolve every toolset in the registry. Useful for validation — catches all
@@ -129,13 +129,13 @@ fn dfs(state: *State, name: []const u8) ResolveError!void {
     };
 
     try state.visiting.put(name, {});
-    try state.path_stack.append(name);
+    try state.path_stack.append(state.allocator, name);
 
     // Emit own tools first (DFS pre-order, left-to-right).
     for (ts.tools) |tool_id| {
         if (state.seen_tools.contains(tool_id)) continue;
         try state.seen_tools.put(tool_id, {});
-        try state.out.append(tool_id);
+        try state.out.append(state.allocator, tool_id);
     }
 
     // Then recurse into includes.
@@ -170,20 +170,19 @@ fn emitCycle(state: *State, name: []const u8) ResolveError!void {
         }
     }
 
-    var buf = std.ArrayList(u8).init(state.diags.arena.allocator());
-    defer buf.deinit();
-    var w = buf.writer();
-    try w.writeAll("cyclic includes: ");
+    const a = state.diags.arena.allocator();
+    var buf: std.ArrayList(u8) = .empty;
+    try buf.appendSlice(a, "cyclic includes: ");
     var first = true;
     for (state.path_stack.items[start..]) |n| {
-        if (!first) try w.writeAll(" -> ");
-        try w.writeAll(n);
+        if (!first) try buf.appendSlice(a, " -> ");
+        try buf.appendSlice(a, n);
         first = false;
     }
     // Close the loop by re-appending the cycle head.
-    try w.writeAll(" -> ");
-    try w.writeAll(name);
+    try buf.appendSlice(a, " -> ");
+    try buf.appendSlice(a, name);
 
-    const owned = try buf.toOwnedSlice();
+    const owned = try buf.toOwnedSlice(a);
     try state.diags.err(state.file, "", "{s}", .{owned});
 }

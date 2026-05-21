@@ -1,6 +1,7 @@
 const std = @import("std");
 const diag = @import("diagnostic");
 const validate = @import("validate");
+const testutil = @import("testutil");
 
 // ------------------------------------------------------------------
 // Fixture scaffolding
@@ -19,13 +20,12 @@ const Fixture = struct {
 fn makeFixture(allocator: std.mem.Allocator) !Fixture {
     var tmp = std.testing.tmpDir(.{});
     errdefer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(allocator, ".");
+    const root = try testutil.realRoot(allocator, &tmp);
     return .{ .tmp = tmp, .root = root };
 }
 
 fn writeFile(tmp: *std.testing.TmpDir, path: []const u8, contents: []const u8) !void {
-    if (std.fs.path.dirname(path)) |d| try tmp.dir.makePath(d);
-    try tmp.dir.writeFile(.{ .sub_path = path, .data = contents });
+    try testutil.writeRel(tmp.dir, path, contents);
 }
 
 // ------------------------------------------------------------------
@@ -71,7 +71,7 @@ fn cleanProjectFixture(allocator: std.mem.Allocator) !Fixture {
     var fix = try makeFixture(allocator);
     errdefer fix.deinit(allocator);
     try writeFile(&fix.tmp, ".mc/mc.json", "{\"name\":\"t\"}");
-    try fix.tmp.dir.makePath(".mc/plugins/cap-a");
+    try testutil.mkdirs(fix.tmp.dir, ".mc/plugins/cap-a");
     try writeFile(&fix.tmp, ".mc/plugins/cap-a/plugin.json", VALID_PLUGIN_JSON);
     try writeFile(&fix.tmp, "toolsets.json", TOOLSETS_JSON);
     try writeFile(&fix.tmp, "agents/foo/agent.json", VALID_AGENT_JSON);
@@ -242,7 +242,7 @@ test "validate: agent with missing prompt.md — 1 error" {
     const ally = std.testing.allocator;
     var fix = try cleanProjectFixture(ally);
     defer fix.deinit(ally);
-    try fix.tmp.dir.deleteFile("agents/foo/prompt.md");
+    try testutil.deleteRel(fix.tmp.dir, "agents/foo/prompt.md");
 
     var result = try validate.runAt(ally, fix.root);
     defer result.deinit();
@@ -267,7 +267,7 @@ test "validate: multiple independent errors across files — all captured" {
         \\{ "name": "cap-a", "compat": { "pluginApi": "xxxxx" } }
     );
     // Break agent (missing prompt.md).
-    try fix.tmp.dir.deleteFile("agents/foo/prompt.md");
+    try testutil.deleteRel(fix.tmp.dir, "agents/foo/prompt.md");
     // Break toolsets (cycle).
     try writeFile(
         &fix.tmp,
@@ -293,7 +293,7 @@ test "validate: no toolsets.json — warning, not error" {
     const ally = std.testing.allocator;
     var fix = try cleanProjectFixture(ally);
     defer fix.deinit(ally);
-    try fix.tmp.dir.deleteFile("toolsets.json");
+    try testutil.deleteRel(fix.tmp.dir, "toolsets.json");
 
     var result = try validate.runAt(ally, fix.root);
     defer result.deinit();

@@ -166,14 +166,14 @@ test "compare: build metadata ignored" {
 test "format: without prerelease" {
     const v = try semver.parseVersion("1.2.3");
     var buf: [32]u8 = undefined;
-    const s = try std.fmt.bufPrint(&buf, "{}", .{v});
+    const s = try std.fmt.bufPrint(&buf, "{f}", .{v});
     try expectEqualStrings("1.2.3", s);
 }
 
 test "format: with prerelease" {
     const v = try semver.parseVersion("1.2.3-rc.1");
     var buf: [32]u8 = undefined;
-    const s = try std.fmt.bufPrint(&buf, "{}", .{v});
+    const s = try std.fmt.bufPrint(&buf, "{f}", .{v});
     try expectEqualStrings("1.2.3-rc.1", s);
 }
 

@@ -2,7 +2,7 @@ const std = @import("std");
 const config_mod = @import("config.zig");
 const marketplace_mod = @import("../schema/marketplace.zig");
 const source_mod = @import("../schema/source.zig");
-const json_mod = @import("../io/json.zig");
+const json_mod = @import("json");
 
 /// Result of resolving a package name.
 pub const ResolvedPlugin = struct {

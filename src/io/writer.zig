@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("compat.zig");
+const compat = @import("iocompat");
 
 /// Atomically write content to a file: writes to a temp file then renames.
 /// Prevents corruption from partial writes or crashes.

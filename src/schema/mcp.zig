@@ -1,6 +1,6 @@
 const std = @import("std");
-const json_mod = @import("../io/json.zig");
-const mmap_mod = @import("../io/mmap.zig");
+const json_mod = @import("json");
+const mmap_mod = @import("mmap");
 
 /// Zero-copy representation of .mcp.json.
 pub const McpConfig = struct {

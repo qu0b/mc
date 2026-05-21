@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const args_mod = @import("args.zig");
 const render = @import("render.zig");
 const resolver = @import("../core/resolver.zig");

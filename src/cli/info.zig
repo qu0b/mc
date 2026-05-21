@@ -1,11 +1,11 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const args_mod = @import("args.zig");
 const render = @import("render.zig");
 const resolver = @import("../core/resolver.zig");
 const source_mod = @import("../schema/source.zig");
-const plugin_mod = @import("../schema/plugin.zig");
-const json_mod = @import("../io/json.zig");
+const plugin_mod = @import("plugin");
+const json_mod = @import("json");
 
 pub fn execute(allocator: std.mem.Allocator, opts: args_mod.InfoOpts) !void {
     var w = compat.getStdout();

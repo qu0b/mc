@@ -1,5 +1,5 @@
 const std = @import("std");
-const mmap = @import("mmap.zig");
+const mmap = @import("mmap");
 
 /// Parse a JSON file into type T with zero-copy semantics.
 /// String fields in the returned struct are slices into the mmap'd buffer.

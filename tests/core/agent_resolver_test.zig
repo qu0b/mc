@@ -3,6 +3,7 @@ const diag = @import("diagnostic");
 const agent_schema = @import("agent");
 const toolset_schema = @import("toolset");
 const resolver = @import("agent_resolver");
+const testutil = @import("testutil");
 
 // ------------------------------------------------------------------
 // Fixture helpers
@@ -26,13 +27,12 @@ const Fixture = struct {
 fn makeFixture(allocator: std.mem.Allocator) !Fixture {
     var tmp = std.testing.tmpDir(.{});
     errdefer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(allocator, ".");
+    const root = try testutil.realRoot(allocator, &tmp);
     return .{ .tmp = tmp, .root = root };
 }
 
 fn writeFile(tmp: *std.testing.TmpDir, path: []const u8, contents: []const u8) !void {
-    if (std.fs.path.dirname(path)) |d| try tmp.dir.makePath(d);
-    try tmp.dir.writeFile(.{ .sub_path = path, .data = contents });
+    try testutil.writeRel(tmp.dir, path, contents);
 }
 
 const VALID_AGENT_JSON =
@@ -73,8 +73,8 @@ fn standardFixture(allocator: std.mem.Allocator, agent_json: []const u8) !Fixtur
     var fix = try makeFixture(allocator);
     errdefer fix.deinit(allocator);
     try writeFile(&fix.tmp, ".mc/mc.json", "{\"name\":\"t\"}");
-    try fix.tmp.dir.makePath(".mc/plugins/cap-a");
-    try fix.tmp.dir.makePath(".mc/plugins/cap-b");
+    try testutil.mkdirs(fix.tmp.dir, ".mc/plugins/cap-a");
+    try testutil.mkdirs(fix.tmp.dir, ".mc/plugins/cap-b");
     try writeFile(&fix.tmp, "agents/foo/agent.json", agent_json);
     try writeFile(&fix.tmp, "agents/foo/prompt.md", "");
     try writeFile(&fix.tmp, "toolsets.json", TOOLSETS_JSON);
@@ -230,7 +230,7 @@ test "validate: missing prompt.md emits error at prompt" {
     var fix = try standardFixture(ally, VALID_AGENT_JSON);
     defer fix.deinit(ally);
     // Remove the prompt.md we wrote in standardFixture.
-    try fix.tmp.dir.deleteFile("agents/foo/prompt.md");
+    try testutil.deleteRel(fix.tmp.dir, "agents/foo/prompt.md");
 
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
@@ -287,7 +287,7 @@ test "validate: multiple violations accumulate (skills + toolset + prompt)" {
     ;
     var fix = try standardFixture(ally, src);
     defer fix.deinit(ally);
-    try fix.tmp.dir.deleteFile("agents/foo/prompt.md");
+    try testutil.deleteRel(fix.tmp.dir, "agents/foo/prompt.md");
 
     var arena = std.heap.ArenaAllocator.init(ally);
     defer arena.deinit();
@@ -422,7 +422,7 @@ test "validateAgentInProject: no toolsets.json anywhere yields warning, continue
     const ally = std.testing.allocator;
     var fix = try standardFixture(ally, VALID_AGENT_JSON);
     defer fix.deinit(ally);
-    try fix.tmp.dir.deleteFile("toolsets.json");
+    try testutil.deleteRel(fix.tmp.dir, "toolsets.json");
 
     var d = diag.Diagnostics.init(ally);
     defer d.deinit();

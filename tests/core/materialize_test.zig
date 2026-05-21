@@ -2,6 +2,8 @@ const std = @import("std");
 const diag = @import("diagnostic");
 const agent_schema = @import("agent");
 const materialize = @import("materialize");
+const testutil = @import("testutil");
+const iocompat = @import("iocompat");
 
 // ------------------------------------------------------------------
 // Fixture helpers
@@ -20,25 +22,24 @@ const Fixture = struct {
 fn makeFixture(allocator: std.mem.Allocator) !Fixture {
     var tmp = std.testing.tmpDir(.{});
     errdefer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(allocator, ".");
+    const root = try testutil.realRoot(allocator, &tmp);
     return .{ .tmp = tmp, .root = root };
 }
 
 fn writeFile(tmp: *std.testing.TmpDir, path: []const u8, contents: []const u8) !void {
-    if (std.fs.path.dirname(path)) |d| try tmp.dir.makePath(d);
-    try tmp.dir.writeFile(.{ .sub_path = path, .data = contents });
+    try testutil.writeRel(tmp.dir, path, contents);
 }
 
-fn writeExec(tmp: *std.testing.TmpDir, path: []const u8, contents: []const u8, mode: std.fs.File.Mode) !void {
-    if (std.fs.path.dirname(path)) |d| try tmp.dir.makePath(d);
-    try tmp.dir.writeFile(.{ .sub_path = path, .data = contents });
-    var f = try tmp.dir.openFile(path, .{ .mode = .read_write });
-    defer f.close();
-    try f.chmod(mode);
+fn writeExec(tmp: *std.testing.TmpDir, path: []const u8, contents: []const u8, mode: std.posix.mode_t) !void {
+    const io = iocompat.getIo();
+    try testutil.writeRel(tmp.dir, path, contents);
+    var f = try tmp.dir.openFile(io, path, .{ .mode = .read_write });
+    defer f.close(io);
+    try f.setPermissions(io, std.Io.File.Permissions.fromMode(mode));
 }
 
 fn readFile(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, path: []const u8) ![]u8 {
-    return tmp.dir.readFileAlloc(allocator, path, 1 << 20);
+    return tmp.dir.readFileAlloc(iocompat.getIo(), path, allocator, .unlimited);
 }
 
 fn makeAgent(name: []const u8, skills: []const []const u8, extensions: []const []const u8) agent_schema.Agent {
@@ -101,7 +102,7 @@ test "library-only capability: all files come from library layer" {
     // Verify files exist at runtime dir.
     const skill_abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-b", "SKILL.md" });
     defer ally.free(skill_abs);
-    try std.fs.accessAbsolute(skill_abs, .{});
+    try iocompat.accessAbsolute(skill_abs);
 }
 
 test "agent override wins over project and library" {
@@ -127,7 +128,7 @@ test "agent override wins over project and library" {
 
     const abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-a", "SKILL.md" });
     defer ally.free(abs);
-    const contents = try std.fs.cwd().readFileAlloc(ally, abs, 1 << 20);
+    const contents = try iocompat.readFile(ally, abs);
     defer ally.free(contents);
     try std.testing.expectEqualStrings("AGENT", contents);
 }
@@ -154,7 +155,7 @@ test "project override wins over library when no agent override" {
 
     const abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-a", "scripts/start.sh" });
     defer ally.free(abs);
-    const contents = try std.fs.cwd().readFileAlloc(ally, abs, 1 << 20);
+    const contents = try iocompat.readFile(ally, abs);
     defer ally.free(contents);
     try std.testing.expectEqualStrings("PROJ", contents);
 }
@@ -204,7 +205,7 @@ test "additive project file: not in library, added from project" {
 
     const abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-a", "NOTES.md" });
     defer ally.free(abs);
-    try std.fs.accessAbsolute(abs, .{});
+    try iocompat.accessAbsolute(abs);
 }
 
 test "additive agent file: not in library or project, added from agent" {
@@ -253,7 +254,7 @@ test "missing capability: diagnostic emitted, error returned, no dir created" {
     // Capability runtime dir should NOT exist.
     const cap_dir = try std.fs.path.join(ally, &.{ fix.root, ".mc", "runtime", "foo", "cap-nonexistent" });
     defer ally.free(cap_dir);
-    const res = std.fs.accessAbsolute(cap_dir, .{});
+    const res = iocompat.accessAbsolute(cap_dir);
     try std.testing.expectError(error.FileNotFound, res);
 }
 
@@ -285,7 +286,7 @@ test "trace.json format: parseable and well-formed" {
 
     const trace_abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "trace.json" });
     defer ally.free(trace_abs);
-    const src = try std.fs.cwd().readFileAlloc(ally, trace_abs, 1 << 20);
+    const src = try iocompat.readFile(ally, trace_abs);
     defer ally.free(src);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, ally, src, .{});
@@ -332,11 +333,11 @@ test "executable bit preserved when copying" {
 
     const run_abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-a", "scripts/run.sh" });
     defer ally.free(run_abs);
-    var f = try std.fs.openFileAbsolute(run_abs, .{});
-    defer f.close();
-    const st = try f.stat();
+    var f = try iocompat.openFileAbsolute(run_abs);
+    defer f.close(iocompat.getIo());
+    const st = try f.stat(iocompat.getIo());
     // Check the owner-execute bit is set.
-    try std.testing.expect((st.mode & 0o100) != 0);
+    try std.testing.expect((st.permissions.toMode() & 0o100) != 0);
 }
 
 test "subdirectory walk preserves relative path" {
@@ -360,7 +361,7 @@ test "subdirectory walk preserves relative path" {
 
     const abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-a", "scripts/nested/deep.sh" });
     defer ally.free(abs);
-    try std.fs.accessAbsolute(abs, .{});
+    try iocompat.accessAbsolute(abs);
 }
 
 test "multiple capabilities each materialized into its own dir" {
@@ -386,8 +387,8 @@ test "multiple capabilities each materialized into its own dir" {
     defer ally.free(a_abs);
     const b_abs = try std.fs.path.join(ally, &.{ result.runtime_dir, "cap-b", "SKILL.md" });
     defer ally.free(b_abs);
-    try std.fs.accessAbsolute(a_abs, .{});
-    try std.fs.accessAbsolute(b_abs, .{});
+    try iocompat.accessAbsolute(a_abs);
+    try iocompat.accessAbsolute(b_abs);
 }
 
 test "duplicate across skills and extensions: materialized once" {

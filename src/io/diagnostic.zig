@@ -26,12 +26,12 @@ pub const Diagnostics = struct {
         return .{
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .items = std.ArrayList(Diagnostic).init(allocator),
+            .items = .empty,
         };
     }
 
     pub fn deinit(self: *Diagnostics) void {
-        self.items.deinit();
+        self.items.deinit(self.allocator);
         self.arena.deinit();
     }
 
@@ -64,7 +64,7 @@ pub const Diagnostics = struct {
         args: anytype,
     ) !void {
         const msg = try std.fmt.allocPrint(self.arena.allocator(), fmt, args);
-        try self.items.append(.{
+        try self.items.append(self.allocator, .{
             .file = file,
             .path = path,
             .severity = sev,

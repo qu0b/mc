@@ -1,5 +1,5 @@
 const std = @import("std");
-const json_mod = @import("../io/json.zig");
+const json_mod = @import("json");
 
 /// Zero-copy representation of .lsp.json or inline lspServers config.
 /// The top-level is a map of server-name -> LspServerConfig.

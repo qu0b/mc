@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("compat.zig");
+const compat = @import("iocompat");
 const posix = std.posix;
 
 /// A memory-mapped file. The `data` slice points directly into the kernel's

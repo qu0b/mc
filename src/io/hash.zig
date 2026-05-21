@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("compat.zig");
+const compat = @import("iocompat");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
 pub const HASH_HEX_LEN = Sha256.digest_length * 2;

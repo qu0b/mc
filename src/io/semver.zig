@@ -37,12 +37,7 @@ pub const Version = struct {
         return comparePre(a.pre.?, b.pre.?);
     }
 
-    pub fn format(
-        self: Version,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: Version, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
         if (self.pre) |pre| try writer.print("-{s}", .{pre});
     }

@@ -44,11 +44,11 @@ test "render with zero diagnostics" {
     var d = diag.Diagnostics.init(std.testing.allocator);
     defer d.deinit();
 
-    var buf: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
 
-    try d.render(buf.writer());
-    try std.testing.expectEqualStrings("Found 0 errors, 0 warnings\n", buf.items);
+    try d.render(&aw.writer);
+    try std.testing.expectEqualStrings("Found 0 errors, 0 warnings\n", aw.writer.buffered());
 }
 
 test "render groups by file and summarizes" {
@@ -59,22 +59,22 @@ test "render groups by file and summarizes" {
     try d.err("a.json", "y", "two", .{});
     try d.warn("a.json", "z", "three", .{});
 
-    var buf: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    try d.render(buf.writer());
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try d.render(&aw.writer);
 
     // a.json must appear before b.json (sorted by file).
-    const a_idx = std.mem.indexOf(u8, buf.items, "a.json").?;
-    const b_idx = std.mem.indexOf(u8, buf.items, "b.json").?;
+    const a_idx = std.mem.indexOf(u8, aw.writer.buffered(), "a.json").?;
+    const b_idx = std.mem.indexOf(u8, aw.writer.buffered(), "b.json").?;
     try std.testing.expect(a_idx < b_idx);
 
     // Summary line — mixed severities with proper pluralization.
-    try std.testing.expect(std.mem.indexOf(u8, buf.items, "Found 2 errors, 1 warning\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "Found 2 errors, 1 warning\n") != null);
 
     // All messages present.
-    try std.testing.expect(std.mem.indexOf(u8, buf.items, "one") != null);
-    try std.testing.expect(std.mem.indexOf(u8, buf.items, "two") != null);
-    try std.testing.expect(std.mem.indexOf(u8, buf.items, "three") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "one") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "two") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "three") != null);
 }
 
 test "render single error uses singular form" {
@@ -83,9 +83,9 @@ test "render single error uses singular form" {
 
     try d.err("f.json", "p", "solo", .{});
 
-    var buf: std.ArrayList(u8) = std.ArrayList(u8).init(std.testing.allocator);
-    defer buf.deinit();
-    try d.render(buf.writer());
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try d.render(&aw.writer);
 
-    try std.testing.expect(std.mem.indexOf(u8, buf.items, "Found 1 error, 0 warnings\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "Found 1 error, 0 warnings\n") != null);
 }

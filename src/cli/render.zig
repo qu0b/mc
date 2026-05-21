@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 
 const Writer = compat.OutWriter;
 

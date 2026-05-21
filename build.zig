@@ -23,6 +23,36 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // The Zig 0.16 I/O compatibility layer. Shared by the exe root and several
+    // named modules, so it must itself be a named leaf module (a file may only
+    // belong to one module). Needs libc for getenv.
+    const iocompat_mod = b.createModule(.{
+        .root_source_file = b.path("src/io/compat.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    // mmap + json are likewise shared between the exe root and the `plugin`
+    // named module, so they are named leaf modules too.
+    const mmap_mod = b.createModule(.{
+        .root_source_file = b.path("src/io/mmap.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "iocompat", .module = iocompat_mod }},
+    });
+    const io_json_mod = b.createModule(.{
+        .root_source_file = b.path("src/io/json.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "mmap", .module = mmap_mod }},
+    });
+    // Shared test-fixture helpers (Zig 0.16 std.Io.Dir wrappers).
+    const testutil_mod = b.createModule(.{
+        .root_source_file = b.path("tests/testutil.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "iocompat", .module = iocompat_mod }},
+    });
     const core_imports = &[_]std.Build.Module.Import{
         .{ .name = "diagnostic", .module = diagnostic_mod },
         .{ .name = "json_strict", .module = json_strict_mod },
@@ -30,15 +60,20 @@ pub fn build(b: *std.Build) void {
     };
 
     // ---- main executable ----
+    // The CLI/core/schema files reach each other through *named* module
+    // imports (e.g. `@import("agent")`). The exe's root module must therefore
+    // expose every such module; the full set is wired up after all modules are
+    // declared, via `exe_root.addImport(...)` near the end of this function.
+    const exe_root = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = core_imports,
+    });
     const exe = b.addExecutable(.{
         .name = "mc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = core_imports,
-        }),
+        .root_module = exe_root,
     });
     b.installArtifact(exe);
 
@@ -57,16 +92,16 @@ pub fn build(b: *std.Build) void {
         .imports = core_imports,
     });
 
-    // Unit tests (inline tests inside src/).
-    const unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = core_imports,
-        }),
+    // Unit tests (inline tests inside src/). Shares the library module's full
+    // import set, wired up below once every named module is declared.
+    const lib_test_root = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = core_imports,
     });
+    const unit_tests = b.addTest(.{ .root_module = lib_test_root });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     // External integration tests under tests/.
@@ -117,7 +152,14 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/schema/plugin.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = core_imports,
+        .imports = &[_]std.Build.Module.Import{
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            .{ .name = "json_strict", .module = json_strict_mod },
+            .{ .name = "semver", .module = semver_mod },
+            .{ .name = "iocompat", .module = iocompat_mod },
+            .{ .name = "mmap", .module = mmap_mod },
+            .{ .name = "json", .module = io_json_mod },
+        },
     });
     const toolset_mod = b.createModule(.{
         .root_source_file = b.path("src/schema/toolset.zig"),
@@ -196,6 +238,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "args", .module = args_mod },
+            .{ .name = "iocompat", .module = iocompat_mod },
+            .{ .name = "agent_schema", .module = agent_schema_mod },
+            .{ .name = "diagnostic", .module = diagnostic_mod },
+            // "emit" added below, after emit_mod is declared.
         },
     });
     const agent_cli_tests = b.addTest(.{
@@ -205,6 +251,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "agent", .module = agent_cli_mod },
+                .{ .name = "testutil", .module = testutil_mod },
             },
         }),
     });
@@ -217,6 +264,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "agent", .module = agent_cli_mod },
+                .{ .name = "testutil", .module = testutil_mod },
             },
         }),
     });
@@ -255,6 +303,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "diagnostic", .module = diagnostic_mod },
             .{ .name = "agent", .module = agent_schema_mod },
             .{ .name = "toolset", .module = toolset_mod },
+            .{ .name = "iocompat", .module = iocompat_mod },
         },
     });
     const agent_resolver_tests = b.addTest(.{
@@ -267,6 +316,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "agent", .module = agent_schema_mod },
                 .{ .name = "toolset", .module = toolset_mod },
                 .{ .name = "agent_resolver", .module = agent_resolver_mod },
+                .{ .name = "testutil", .module = testutil_mod },
             },
         }),
     });
@@ -281,6 +331,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "diagnostic", .module = diagnostic_mod },
             .{ .name = "semver", .module = semver_mod },
             .{ .name = "plugin", .module = plugin_strict_mod },
+            .{ .name = "iocompat", .module = iocompat_mod },
         },
     });
     const compat_tests = b.addTest(.{
@@ -308,6 +359,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "semver", .module = semver_mod },
                 .{ .name = "plugin", .module = plugin_strict_mod },
                 .{ .name = "compat", .module = core_compat_mod },
+                .{ .name = "iocompat", .module = iocompat_mod },
             },
         }),
     });
@@ -321,6 +373,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "diagnostic", .module = diagnostic_mod },
             .{ .name = "agent", .module = agent_schema_mod },
+            .{ .name = "iocompat", .module = iocompat_mod },
         },
     });
     const materialize_tests = b.addTest(.{
@@ -332,6 +385,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "diagnostic", .module = diagnostic_mod },
                 .{ .name = "agent", .module = agent_schema_mod },
                 .{ .name = "materialize", .module = materialize_mod },
+                .{ .name = "testutil", .module = testutil_mod },
+                .{ .name = "iocompat", .module = iocompat_mod },
             },
         }),
     });
@@ -347,6 +402,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "agent_resolver", .module = agent_resolver_mod },
         .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
         .{ .name = "compat", .module = core_compat_mod },
+        .{ .name = "iocompat", .module = iocompat_mod },
     };
     const validate_cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli/validate.zig"),
@@ -363,6 +419,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "diagnostic", .module = diagnostic_mod },
                 .{ .name = "validate", .module = validate_cli_mod },
+                .{ .name = "testutil", .module = testutil_mod },
             },
         }),
     });
@@ -380,6 +437,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "agent_resolver", .module = agent_resolver_mod },
             .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
             .{ .name = "materialize", .module = materialize_mod },
+            .{ .name = "iocompat", .module = iocompat_mod },
         },
     });
     const run_cmd_tests = b.addTest(.{
@@ -390,12 +448,102 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "diagnostic", .module = diagnostic_mod },
                 .{ .name = "run", .module = run_cmd_mod },
+                .{ .name = "testutil", .module = testutil_mod },
             },
         }),
     });
     const run_run_cmd_tests = b.addRunArtifact(run_cmd_tests);
 
+    // ---- Phase 12: agent-config superset emitters ----
+    const emit_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/emit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "agent", .module = agent_schema_mod },
+        },
+    });
+    const emit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/core/emit_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "diagnostic", .module = diagnostic_mod },
+                .{ .name = "agent", .module = agent_schema_mod },
+                .{ .name = "emit", .module = emit_mod },
+            },
+        }),
+    });
+    const run_emit_tests = b.addRunArtifact(emit_tests);
+
+    // `mc agent emit` (in the agent CLI module) renders via the emitters.
+    agent_cli_mod.addImport("emit", emit_mod);
+
+    // Wire every named module the exe's CLI/core/schema files import into the
+    // exe root module (they share one import table since they are pulled in via
+    // relative imports).
+    exe_root.addImport("agent", agent_schema_mod);
+    // Alias used by cli/agent.zig (whose test build reserves "agent" for the
+    // CLI module itself).
+    exe_root.addImport("agent_schema", agent_schema_mod);
+    exe_root.addImport("toolset", toolset_mod);
+    exe_root.addImport("library", library_mod);
+    exe_root.addImport("plugin", plugin_strict_mod);
+    exe_root.addImport("agent_resolver", agent_resolver_mod);
+    exe_root.addImport("toolset_resolver", toolset_resolver_mod);
+    exe_root.addImport("materialize", materialize_mod);
+    exe_root.addImport("compat", core_compat_mod);
+    exe_root.addImport("emit", emit_mod);
+    exe_root.addImport("iocompat", iocompat_mod);
+    exe_root.addImport("mmap", mmap_mod);
+    exe_root.addImport("json", io_json_mod);
+
+    // The library module (`@import("mc")`) and its inline-test runner re-export
+    // the same named modules so the whole public surface in `src/root.zig`
+    // actually compiles for consumers.
+    const lib_named = [_]std.Build.Module.Import{
+        .{ .name = "iocompat", .module = iocompat_mod },
+        .{ .name = "mmap", .module = mmap_mod },
+        .{ .name = "json", .module = io_json_mod },
+        .{ .name = "agent", .module = agent_schema_mod },
+        .{ .name = "toolset", .module = toolset_mod },
+        .{ .name = "library", .module = library_mod },
+        .{ .name = "plugin", .module = plugin_strict_mod },
+        .{ .name = "agent_resolver", .module = agent_resolver_mod },
+        .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
+        .{ .name = "materialize", .module = materialize_mod },
+        .{ .name = "compat", .module = core_compat_mod },
+        .{ .name = "emit", .module = emit_mod },
+    };
+    for (lib_named) |imp| {
+        mc_mod.addImport(imp.name, imp.module);
+        lib_test_root.addImport(imp.name, imp.module);
+    }
+
+    // ---- runnable library-consumer example ----
+    const example_exe = b.addExecutable(.{
+        .name = "emit_agent",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/emit_agent.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "mc", .module = mc_mod }},
+        }),
+    });
+    const run_example = b.addRunArtifact(example_exe);
+    const example_step = b.step("example", "Build & run the library-consumer example");
+    example_step.dependOn(&run_example.step);
+
+    // Pure config-layer tests (no filesystem); buildable independently of the
+    // CLI exe so the agent-config superset can be validated in isolation.
+    const test_config_step = b.step("test-config", "Run agent-config superset + emitter tests");
+    test_config_step.dependOn(&run_agent_schema_tests.step);
+    test_config_step.dependOn(&run_emit_tests.step);
+
     const test_step = b.step("test", "Run all tests");
+    test_step.dependOn(&run_emit_tests.step);
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_semver_tests.step);
     test_step.dependOn(&run_diagnostic_tests.step);

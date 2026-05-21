@@ -1,5 +1,6 @@
 const std = @import("std");
 const agent = @import("agent");
+const testutil = @import("testutil");
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -101,17 +102,13 @@ test "renderPrompt: title-cases mixed input" {
 // ---------------- scaffold integration (tmp dir) ----------------
 
 /// Helper: init a fake mc sandbox (.mc/mc.json) inside the given dir.
-fn initFakeSandbox(dir: std.fs.Dir) !void {
-    try dir.makeDir(".mc");
-    try dir.writeFile(.{
-        .sub_path = ".mc/mc.json",
-        .data = "{\"name\":\"test\"}\n",
-    });
+fn initFakeSandbox(dir: testutil.Dir) !void {
+    try testutil.writeRel(dir, ".mc/mc.json", "{\"name\":\"test\"}\n");
 }
 
 /// Helper: realpath of a TmpDir.
 fn tmpPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]const u8 {
-    return tmp.dir.realpathAlloc(allocator, ".");
+    return testutil.realRoot(allocator, tmp);
 }
 
 test "scaffoldAt: non-sandbox dir returns not_a_sandbox without creating files" {
@@ -126,7 +123,7 @@ test "scaffoldAt: non-sandbox dir returns not_a_sandbox without creating files" 
     try expectEqual(agent.ScaffoldResult.not_a_sandbox, res);
 
     // No agents/ directory created.
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access("agents", .{}));
+    try std.testing.expectError(error.FileNotFound, testutil.accessRel(tmp.dir, "agents"));
 }
 
 test "scaffoldAt: fresh sandbox creates expected tree with valid JSON" {
@@ -142,13 +139,13 @@ test "scaffoldAt: fresh sandbox creates expected tree with valid JSON" {
     try expectEqual(agent.ScaffoldResult.created, res);
 
     // Directory tree.
-    try tmp.dir.access("agents/foo/agent.json", .{});
-    try tmp.dir.access("agents/foo/prompt.md", .{});
-    try tmp.dir.access("agents/foo/overrides", .{});
-    try tmp.dir.access("agents/foo/overrides/.gitkeep", .{});
+    try testutil.accessRel(tmp.dir, "agents/foo/agent.json");
+    try testutil.accessRel(tmp.dir, "agents/foo/prompt.md");
+    try testutil.accessRel(tmp.dir, "agents/foo/overrides");
+    try testutil.accessRel(tmp.dir, "agents/foo/overrides/.gitkeep");
 
     // agent.json is valid JSON and has "name": "foo".
-    const json_bytes = try tmp.dir.readFileAlloc(allocator, "agents/foo/agent.json", 64 * 1024);
+    const json_bytes = try testutil.readRel(allocator, tmp.dir, "agents/foo/agent.json");
     defer allocator.free(json_bytes);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
@@ -156,7 +153,7 @@ test "scaffoldAt: fresh sandbox creates expected tree with valid JSON" {
     try expectEqualStrings("foo", parsed.value.object.get("name").?.string);
 
     // prompt.md starts with "# Foo Agent".
-    const prompt_bytes = try tmp.dir.readFileAlloc(allocator, "agents/foo/prompt.md", 64 * 1024);
+    const prompt_bytes = try testutil.readRel(allocator, tmp.dir, "agents/foo/prompt.md");
     defer allocator.free(prompt_bytes);
     try expect(std.mem.startsWith(u8, prompt_bytes, "# Foo Agent"));
 }
@@ -173,15 +170,12 @@ test "scaffoldAt: already existing agent is not overwritten" {
     _ = try agent.scaffoldAt(allocator, path, .{ .name = "foo" });
 
     // Tamper with the file to verify it's preserved on second call.
-    try tmp.dir.writeFile(.{
-        .sub_path = "agents/foo/agent.json",
-        .data = "SENTINEL",
-    });
+    try testutil.writeRel(tmp.dir, "agents/foo/agent.json", "SENTINEL");
 
     const res = try agent.scaffoldAt(allocator, path, .{ .name = "foo" });
     try expectEqual(agent.ScaffoldResult.already_exists, res);
 
-    const after = try tmp.dir.readFileAlloc(allocator, "agents/foo/agent.json", 64 * 1024);
+    const after = try testutil.readRel(allocator, tmp.dir, "agents/foo/agent.json");
     defer allocator.free(after);
     try expectEqualStrings("SENTINEL", after);
 }
@@ -202,8 +196,8 @@ test "scaffoldAt: invalid slug rejected and no agents dir populated" {
     try expectEqual(agent.ScaffoldResult.invalid_name, r2);
 
     // No agent directory created for the rejected slugs.
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access("agents/FOO", .{}));
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access("agents/1foo", .{}));
+    try std.testing.expectError(error.FileNotFound, testutil.accessRel(tmp.dir, "agents/FOO"));
+    try std.testing.expectError(error.FileNotFound, testutil.accessRel(tmp.dir, "agents/1foo"));
 }
 
 test "scaffoldAt: --model override is written to agent.json" {
@@ -221,7 +215,7 @@ test "scaffoldAt: --model override is written to agent.json" {
     });
     try expectEqual(agent.ScaffoldResult.created, res);
 
-    const json = try tmp.dir.readFileAlloc(allocator, "agents/bar/agent.json", 64 * 1024);
+    const json = try testutil.readRel(allocator, tmp.dir, "agents/bar/agent.json");
     defer allocator.free(json);
     try expect(std.mem.indexOf(u8, json, "\"model\": \"anthropic/claude-opus-4\"") != null);
 }

@@ -1,13 +1,13 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const args_mod = @import("args.zig");
 const render = @import("render.zig");
 const sandbox = @import("../core/sandbox.zig");
 const mcp_mod = @import("../schema/mcp.zig");
 const lsp_mod = @import("../schema/lsp.zig");
 const hooks_mod = @import("../schema/hooks.zig");
-const plugin_mod = @import("../schema/plugin.zig");
-const json_mod = @import("../io/json.zig");
+const plugin_mod = @import("plugin");
+const json_mod = @import("json");
 const writer_mod = @import("../io/writer.zig");
 
 pub fn execute(allocator: std.mem.Allocator, cmd: args_mod.GenerateCmd) !void {

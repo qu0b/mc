@@ -1,5 +1,6 @@
 const std = @import("std");
 const agent = @import("agent");
+const testutil = @import("testutil");
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -7,22 +8,18 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 
 // ---------------- helpers ----------------
 
-fn initFakeSandbox(dir: std.fs.Dir) !void {
-    try dir.makeDir(".mc");
-    try dir.writeFile(.{ .sub_path = ".mc/mc.json", .data = "{\"name\":\"test\"}\n" });
+fn initFakeSandbox(dir: testutil.Dir) !void {
+    try testutil.writeRel(dir, ".mc/mc.json", "{\"name\":\"test\"}\n");
 }
 
 fn tmpPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]const u8 {
-    return tmp.dir.realpathAlloc(allocator, ".");
+    return testutil.realRoot(allocator, tmp);
 }
 
-fn writeTrace(dir: std.fs.Dir, agent_name: []const u8, body: []const u8) !void {
-    var path_buf: [256]u8 = undefined;
-    const runtime_dir = try std.fmt.bufPrint(&path_buf, ".mc/runtime/{s}", .{agent_name});
-    try dir.makePath(runtime_dir);
+fn writeTrace(dir: testutil.Dir, agent_name: []const u8, body: []const u8) !void {
     var trace_path_buf: [256]u8 = undefined;
-    const trace_path = try std.fmt.bufPrint(&trace_path_buf, "{s}/trace.json", .{runtime_dir});
-    try dir.writeFile(.{ .sub_path = trace_path, .data = body });
+    const trace_path = try std.fmt.bufPrint(&trace_path_buf, ".mc/runtime/{s}/trace.json", .{agent_name});
+    try testutil.writeRel(dir, trace_path, body);
 }
 
 // ---------------- 1. trace exists, simple case ----------------
@@ -78,13 +75,13 @@ test "executeShowWriter: single cap, 3 files across 3 layers" {
 
     try writeTrace(tmp.dir, "rev", trace_body);
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const res = try agent.executeShowWriter(allocator, root, "rev", buf.writer());
+    const res = try agent.executeShowWriter(allocator, root, "rev", &aw.writer);
     try expectEqual(agent.ShowResult.ok, res);
 
-    const out = buf.items;
+    const out = aw.writer.buffered();
     try expect(std.mem.indexOf(u8, out, "Agent: rev") != null);
     try expect(std.mem.indexOf(u8, out, "browser-tools (library v1.0.0)") != null);
     try expect(std.mem.indexOf(u8, out, "SKILL.md") != null);
@@ -111,13 +108,13 @@ test "executeShowWriter: missing trace prints hint, returns no_trace" {
     const root = try tmpPath(allocator, &tmp);
     defer allocator.free(root);
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const res = try agent.executeShowWriter(allocator, root, "ghost", buf.writer());
+    const res = try agent.executeShowWriter(allocator, root, "ghost", &aw.writer);
     try expectEqual(agent.ShowResult.no_trace, res);
 
-    const out = buf.items;
+    const out = aw.writer.buffered();
     try expect(std.mem.indexOf(u8, out, "No runtime trace for agent 'ghost'") != null);
     try expect(std.mem.indexOf(u8, out, "mc run ghost --dry-run") != null);
 }
@@ -154,13 +151,13 @@ test "executeShowWriter: lists multiple caps in JSON order" {
     ;
     try writeTrace(tmp.dir, "multi", trace_body);
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const res = try agent.executeShowWriter(allocator, root, "multi", buf.writer());
+    const res = try agent.executeShowWriter(allocator, root, "multi", &aw.writer);
     try expectEqual(agent.ShowResult.ok, res);
 
-    const out = buf.items;
+    const out = aw.writer.buffered();
     const a_idx = std.mem.indexOf(u8, out, "alpha ").?;
     const b_idx = std.mem.indexOf(u8, out, "beta ").?;
     const g_idx = std.mem.indexOf(u8, out, "gamma ").?;
@@ -199,15 +196,15 @@ test "executeShowWriter: summary line reflects layer counts" {
     ;
     try writeTrace(tmp.dir, "counts", trace_body);
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const res = try agent.executeShowWriter(allocator, root, "counts", buf.writer());
+    const res = try agent.executeShowWriter(allocator, root, "counts", &aw.writer);
     try expectEqual(agent.ShowResult.ok, res);
 
     try expect(std.mem.indexOf(
         u8,
-        buf.items,
+        aw.writer.buffered(),
         "Files by layer: 3 library, 2 project, 1 agent",
     ) != null);
 }
@@ -237,13 +234,13 @@ test "executeShowWriter: null library_version renders without version" {
     ;
     try writeTrace(tmp.dir, "nv", trace_body);
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const res = try agent.executeShowWriter(allocator, root, "nv", buf.writer());
+    const res = try agent.executeShowWriter(allocator, root, "nv", &aw.writer);
     try expectEqual(agent.ShowResult.ok, res);
 
-    const out = buf.items;
+    const out = aw.writer.buffered();
     // Header line should be exactly "nover (library)" — no "v<something>".
     try expect(std.mem.indexOf(u8, out, "nover (library)\n") != null);
     try expect(std.mem.indexOf(u8, out, "nover (library v") == null);
@@ -260,10 +257,10 @@ test "executeShowWriter: non-sandbox prints helpful message gracefully" {
     const root = try tmpPath(allocator, &tmp);
     defer allocator.free(root);
 
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const res = try agent.executeShowWriter(allocator, root, "foo", buf.writer());
+    const res = try agent.executeShowWriter(allocator, root, "foo", &aw.writer);
     try expectEqual(agent.ShowResult.not_a_sandbox, res);
-    try expect(std.mem.indexOf(u8, buf.items, "Not an mc project") != null);
+    try expect(std.mem.indexOf(u8, aw.writer.buffered(), "Not an mc project") != null);
 }

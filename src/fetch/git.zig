@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 
 pub const GitError = error{
     GitNotFound,

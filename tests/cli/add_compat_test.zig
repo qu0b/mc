@@ -9,25 +9,26 @@ const std = @import("std");
 const diag = @import("diagnostic");
 const plugin = @import("plugin");
 const core_compat = @import("compat");
+const iocompat = @import("iocompat");
+
+var temp_seq: usize = 0;
 
 fn makeTempDir(allocator: std.mem.Allocator) ![]const u8 {
-    const ts = std.time.nanoTimestamp();
+    temp_seq += 1;
     const path = try std.fmt.allocPrint(
         allocator,
-        "/tmp/mc-phase4-test-{d}",
-        .{ts},
+        "/tmp/mc-phase4-test-{d}-{d}",
+        .{ iocompat.nowUnixSeconds(), temp_seq },
     );
-    std.fs.deleteTreeAbsolute(path) catch {};
-    try std.fs.makeDirAbsolute(path);
+    iocompat.deleteTreeAbsolute(path);
+    try iocompat.makeDirAbsolute(path);
     return path;
 }
 
 fn writeFile(allocator: std.mem.Allocator, dir: []const u8, name: []const u8, body: []const u8) !void {
     const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name });
     defer allocator.free(path);
-    const f = try std.fs.createFileAbsolute(path, .{});
-    defer f.close();
-    try f.writeAll(body);
+    try iocompat.writeFileAtPath(path, body);
 }
 
 fn countBySeverity(diags: *const diag.Diagnostics, sev: diag.Severity) usize {
@@ -39,7 +40,7 @@ fn countBySeverity(diags: *const diag.Diagnostics, sev: diag.Severity) usize {
 }
 
 fn existsPath(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+    iocompat.accessAbsolute(path) catch return false;
     return true;
 }
 
@@ -49,7 +50,7 @@ test "fixture with minMcVersion 99.0.0 — checkPluginDir fails, diagnostics emi
     const a = arena.allocator();
 
     const plugin_dir = try makeTempDir(a);
-    defer std.fs.deleteTreeAbsolute(plugin_dir) catch {};
+    defer iocompat.deleteTreeAbsolute(plugin_dir);
 
     try writeFile(a, plugin_dir, "plugin.json",
         \\{
@@ -82,7 +83,7 @@ test "fixture with minMcVersion 99.0.0 + --ignore-compat downgrades severity" {
     const a = arena.allocator();
 
     const plugin_dir = try makeTempDir(a);
-    defer std.fs.deleteTreeAbsolute(plugin_dir) catch {};
+    defer iocompat.deleteTreeAbsolute(plugin_dir);
 
     try writeFile(a, plugin_dir, "plugin.json",
         \\{
@@ -115,7 +116,7 @@ test "fixture with satisfied compat block — checkPluginDir passes cleanly" {
     const a = arena.allocator();
 
     const plugin_dir = try makeTempDir(a);
-    defer std.fs.deleteTreeAbsolute(plugin_dir) catch {};
+    defer iocompat.deleteTreeAbsolute(plugin_dir);
 
     try writeFile(a, plugin_dir, "plugin.json",
         \\{
@@ -145,10 +146,10 @@ test "plugin.json under .claude-plugin/ is found" {
     const a = arena.allocator();
 
     const plugin_dir = try makeTempDir(a);
-    defer std.fs.deleteTreeAbsolute(plugin_dir) catch {};
+    defer iocompat.deleteTreeAbsolute(plugin_dir);
 
     const cp_dir = try std.fmt.allocPrint(a, "{s}/.claude-plugin", .{plugin_dir});
-    try std.fs.makeDirAbsolute(cp_dir);
+    try iocompat.makeDirAbsolute(cp_dir);
     try writeFile(a, cp_dir, "plugin.json",
         \\{
         \\  "name": "nested",
@@ -174,7 +175,7 @@ test "plugin without plugin.json passes with no diagnostics" {
     const a = arena.allocator();
 
     const plugin_dir = try makeTempDir(a);
-    defer std.fs.deleteTreeAbsolute(plugin_dir) catch {};
+    defer iocompat.deleteTreeAbsolute(plugin_dir);
 
     var diags = diag.Diagnostics.init(std.testing.allocator);
     defer diags.deinit();
@@ -194,7 +195,7 @@ test "plugin.json without compat block passes" {
     const a = arena.allocator();
 
     const plugin_dir = try makeTempDir(a);
-    defer std.fs.deleteTreeAbsolute(plugin_dir) catch {};
+    defer iocompat.deleteTreeAbsolute(plugin_dir);
 
     try writeFile(a, plugin_dir, "plugin.json",
         \\{ "name": "no-compat", "version": "1.0.0" }

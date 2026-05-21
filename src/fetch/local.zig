@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 
 /// Copy a local directory to a target directory.
 pub fn copyDir(src_path: []const u8, dst_path: []const u8) !void {

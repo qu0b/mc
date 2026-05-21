@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 
 /// Download a URL to a file path.
 /// NOTE: std.http.Client has changed in Zig 0.16. This is stubbed out.

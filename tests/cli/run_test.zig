@@ -1,6 +1,7 @@
 const std = @import("std");
 const diag = @import("diagnostic");
 const run = @import("run");
+const testutil = @import("testutil");
 
 // ----- Fixtures -----
 
@@ -17,13 +18,12 @@ const Fixture = struct {
 fn makeFixture(allocator: std.mem.Allocator) !Fixture {
     var tmp = std.testing.tmpDir(.{});
     errdefer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(allocator, ".");
+    const root = try testutil.realRoot(allocator, &tmp);
     return .{ .tmp = tmp, .root = root };
 }
 
 fn writeFile(tmp: *std.testing.TmpDir, path: []const u8, contents: []const u8) !void {
-    if (std.fs.path.dirname(path)) |d| try tmp.dir.makePath(d);
-    try tmp.dir.writeFile(.{ .sub_path = path, .data = contents });
+    try testutil.writeRel(tmp.dir, path, contents);
 }
 
 /// Standard valid project with a single agent.  `extra_toolsets` is inlined
@@ -34,9 +34,9 @@ fn buildProject(
     toolsets_json: []const u8,
 ) !void {
     try writeFile(tmp, ".mc/mc.json", "{\"name\":\"t\"}");
-    try tmp.dir.makePath(".mc/plugins/cap-a");
+    try testutil.mkdirs(tmp.dir, ".mc/plugins/cap-a");
     try writeFile(tmp, ".mc/plugins/cap-a/SKILL.md", "# cap-a\n");
-    try tmp.dir.makePath(".mc/plugins/cap-b");
+    try testutil.mkdirs(tmp.dir, ".mc/plugins/cap-b");
     try writeFile(tmp, ".mc/plugins/cap-b/SKILL.md", "# cap-b\n");
     try writeFile(tmp, "toolsets.json", toolsets_json);
     try writeFile(tmp, "agents/foo/agent.json", agent_json);
@@ -98,7 +98,7 @@ test "clean project: buildCommand produces well-formed argv" {
     var diags = diag.Diagnostics.init(ally);
     defer diags.deinit();
 
-    var empty_env = std.process.EnvMap.init(ally);
+    var empty_env = std.StringHashMap([]const u8).init(ally);
     defer empty_env.deinit();
 
     var cmd = try run.buildCommand(
@@ -176,7 +176,7 @@ test "missing required env var: error + missing_env populated" {
     defer diags.deinit();
 
     // Empty env map ⇒ MC_UNSET_VAR_XYZ absent.
-    var env = std.process.EnvMap.init(ally);
+    var env = std.StringHashMap([]const u8).init(ally);
     defer env.deinit();
 
     const res = run.buildCommand(
@@ -205,12 +205,12 @@ test "missing prompt file: PromptFileMissing error" {
     var fix = try makeFixture(ally);
     defer fix.deinit(ally);
     try buildProject(&fix.tmp, VALID_AGENT, TOOLSETS);
-    try fix.tmp.dir.deleteFile("agents/foo/prompt.md");
+    try testutil.deleteRel(fix.tmp.dir, "agents/foo/prompt.md");
 
     var diags = diag.Diagnostics.init(ally);
     defer diags.deinit();
 
-    var env = std.process.EnvMap.init(ally);
+    var env = std.StringHashMap([]const u8).init(ally);
     defer env.deinit();
 
     const res = run.buildCommand(
@@ -288,7 +288,7 @@ test "toolset transitive include: all tools appear in --tools CSV" {
     var diags = diag.Diagnostics.init(ally);
     defer diags.deinit();
 
-    var env = std.process.EnvMap.init(ally);
+    var env = std.StringHashMap([]const u8).init(ally);
     defer env.deinit();
 
     var cmd = try run.buildCommand(
@@ -314,7 +314,7 @@ test "extra_args: pass-through appears at tail of argv" {
     var diags = diag.Diagnostics.init(ally);
     defer diags.deinit();
 
-    var env = std.process.EnvMap.init(ally);
+    var env = std.StringHashMap([]const u8).init(ally);
     defer env.deinit();
 
     const extras = [_][]const u8{ "--thinking", "high" };
@@ -342,7 +342,7 @@ test "dry-run render: printDryRun produces argv-shaped output with PROMPT placeh
     var diags = diag.Diagnostics.init(ally);
     defer diags.deinit();
 
-    var env = std.process.EnvMap.init(ally);
+    var env = std.StringHashMap([]const u8).init(ally);
     defer env.deinit();
 
     var cmd = try run.buildCommand(
@@ -356,9 +356,9 @@ test "dry-run render: printDryRun produces argv-shaped output with PROMPT placeh
 
     // Exercise writeShellQuoted on a few values to prove it doesn't mangle
     // safe args and that it quotes risky ones.
-    var buf = std.ArrayList(u8).init(ally);
-    defer buf.deinit();
-    var w = buf.writer();
+    var aw: std.Io.Writer.Allocating = .init(ally);
+    defer aw.deinit();
+    const w = &aw.writer;
 
     try run.writeShellQuoted(w, "simple");
     try w.writeAll(" ");
@@ -368,7 +368,7 @@ test "dry-run render: printDryRun produces argv-shaped output with PROMPT placeh
     try w.writeAll(" ");
     try run.writeShellQuoted(w, "");
 
-    const out = buf.items;
+    const out = aw.writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, out, "simple") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "'hello world'") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "'it'\\''s'") != null);

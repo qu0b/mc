@@ -135,10 +135,81 @@ pub fn readLinkInDir(dir: Dir, name: []const u8, buf: []u8) !usize {
     return dir.readLink(getIo(), name, buf);
 }
 
-// --- Realpath ---
+// --- Realpath / cwd ---
 
 pub fn realpathAlloc(allocator: Allocator, path: []const u8) ![]const u8 {
     return Dir.cwd().realPathFileAlloc(getIo(), path, allocator);
+}
+
+/// Absolute path of the current working directory (owned by `allocator`).
+pub fn getCwdAlloc(allocator: Allocator) ![]const u8 {
+    return Dir.cwd().realPathFileAlloc(getIo(), ".", allocator);
+}
+
+// --- File kind / existence helpers ---
+
+/// Stat an absolute path; null if it doesn't exist or can't be stat'd.
+pub fn pathKind(path: []const u8) ?File.Kind {
+    const st = Dir.cwd().statFile(getIo(), path, .{}) catch return null;
+    return st.kind;
+}
+
+pub fn isDir(path: []const u8) bool {
+    return (pathKind(path) orelse return false) == .directory;
+}
+
+pub fn isFile(path: []const u8) bool {
+    return (pathKind(path) orelse return false) == .file;
+}
+
+// --- Recursive mkdir / file copy by absolute path ---
+
+/// Recursively create `path` and any missing ancestors (`mkdir -p`).
+/// `path` must be absolute.
+pub fn makePathAbsolute(path: []const u8) !void {
+    var i: usize = 1; // skip leading '/'
+    while (i <= path.len) : (i += 1) {
+        if (i == path.len or path[i] == '/') {
+            const prefix = path[0..i];
+            if (prefix.len == 0) continue;
+            Dir.createDirAbsolute(getIo(), prefix, .default_dir) catch |e| switch (e) {
+                error.PathAlreadyExists => {},
+                else => return e,
+            };
+        }
+    }
+}
+
+pub fn copyFileAbsolute(src_abs: []const u8, dst_abs: []const u8) !void {
+    return Dir.cwd().copyFile(src_abs, Dir.cwd(), dst_abs, getIo(), .{});
+}
+
+// --- Environment ---
+
+/// Current wall-clock time as whole seconds since the Unix epoch.
+pub fn nowUnixSeconds() i64 {
+    const ts = Io.Clock.now(.real, getIo());
+    return @intCast(@divFloor(ts.nanoseconds, std.time.ns_per_s));
+}
+
+/// True if env var `name` is set (presence check; libc is linked).
+pub fn hasEnvVar(name: []const u8) bool {
+    var buf: [256]u8 = undefined;
+    if (name.len >= buf.len) return false;
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;
+    return std.c.getenv(buf[0..name.len :0]) != null;
+}
+
+/// Spawn `argv` inheriting stdio, wait, and return its exit code (1 on signal).
+/// Replaces the old `std.process.execv` exec-replace with spawn+wait.
+pub fn execReplace(argv: []const []const u8) !u8 {
+    var child = try std.process.spawn(getIo(), .{ .argv = argv });
+    const term = try child.wait(getIo());
+    return switch (term) {
+        .exited => |code| code,
+        else => 1,
+    };
 }
 
 // --- Dir iteration ---

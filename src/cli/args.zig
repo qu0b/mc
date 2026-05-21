@@ -117,6 +117,7 @@ pub const GenerateBeesOpts = struct {
 pub const AgentSub = union(enum) {
     new: AgentNewOpts,
     show: AgentShowOpts,
+    emit: AgentEmitOpts,
     // TODO(phase-later): validate
 };
 
@@ -130,6 +131,12 @@ pub const AgentNewOpts = struct {
 pub const AgentShowOpts = struct {
     name: []const u8,
     // TODO(phase-later): --json, --files-only, etc.
+};
+
+pub const AgentEmitOpts = struct {
+    name: []const u8,
+    /// Target runtime: claude | openclaw | pi. Null → the agent's `runtime`.
+    target: ?[]const u8 = null,
 };
 
 pub fn parse(args_iter: anytype) !Command {
@@ -259,6 +266,15 @@ fn parseAgent(args_iter: anytype) !Command {
     } else if (std.mem.eql(u8, sub, "show")) {
         const name = args_iter.next() orelse return error.MissingArgument;
         return .{ .agent = .{ .show = .{ .name = name } } };
+    } else if (std.mem.eql(u8, sub, "emit")) {
+        const name = args_iter.next() orelse return error.MissingArgument;
+        var opts = AgentEmitOpts{ .name = name };
+        while (args_iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--target") or std.mem.eql(u8, arg, "-t")) {
+                opts.target = args_iter.next();
+            }
+        }
+        return .{ .agent = .{ .emit = opts } };
     }
 
     return error.UnknownSubcommand;
@@ -266,10 +282,10 @@ fn parseAgent(args_iter: anytype) !Command {
 
 fn parseRun(args_iter: anytype) !Command {
     // Collect all remaining args; parsing order matters for the `--` split.
-    var remaining: std.ArrayList([]const u8) = std.ArrayList([]const u8).init(std.heap.page_allocator);
+    var remaining: std.ArrayList([]const u8) = .empty;
     // remaining lives for the lifetime of the program (main).  Reuse page_allocator
     // since Command owns borrowed slices from the original argv anyway.
-    while (args_iter.next()) |a| try remaining.append(a);
+    while (args_iter.next()) |a| try remaining.append(std.heap.page_allocator, a);
     const items = remaining.items;
 
     var name: ?[]const u8 = null;

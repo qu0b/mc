@@ -12,6 +12,8 @@ pub const Capabilities = struct {
 pub const Env = struct {
     required: []const []const u8,
     optional: []const []const u8,
+    /// Optional explicit name=value pairs (raw object). Null when absent.
+    vars: ?std.json.Value = null,
 };
 
 pub const Session = struct {
@@ -19,7 +21,44 @@ pub const Session = struct {
     r2_bucket: ?[]const u8 = null,
 };
 
+// ---- superset blocks (all optional) ----
+
+/// Cross-runtime tool policy. `toolset` (in capabilities) names a group;
+/// these refine it with explicit allow/deny lists and a builtin toggle.
+pub const Tools = struct {
+    allow: []const []const u8 = &.{},
+    deny: []const []const u8 = &.{},
+    builtin: ?bool = null,
+};
+
+/// Permission policy. `default` is the fallback action; `rules` is a raw
+/// map of tool-glob -> action (kept as JSON for runtime-specific shapes).
+pub const Permissions = struct {
+    default: ?[]const u8 = null, // always_allow | ask | deny
+    rules: ?std.json.Value = null,
+};
+
+/// Execution environment / container.
+pub const Sandbox = struct {
+    backend: ?[]const u8 = null, // local | docker | ssh | cloud | anthropic | modal | daytona
+    image: ?[]const u8 = null,
+    cpu: ?i64 = null,
+    memory: ?i64 = null, // MB
+    network: ?[]const u8 = null, // none | restricted | all
+    workdir: ?[]const u8 = null,
+};
+
+pub const Memory = struct {
+    enabled: ?bool = null,
+    backend: ?[]const u8 = null,
+};
+
+pub const Multiagent = struct {
+    delegates: []const []const u8 = &.{},
+};
+
 pub const Agent = struct {
+    // ---- existing required core ----
     name: []const u8,
     description: []const u8,
     model: []const u8,
@@ -29,10 +68,54 @@ pub const Agent = struct {
     capabilities: Capabilities,
     env: Env,
     session: ?Session = null,
+
+    // ---- superset (optional) ----
+    /// Default runtime emitter target. pi | claude | hermes | openclaw.
+    runtime: ?[]const u8 = null,
+    /// Inline system prompt (overrides the `prompt` file when emitting).
+    system: ?[]const u8 = null,
+    /// Model speed mode (Claude fast mode et al). standard | fast.
+    speed: ?[]const u8 = null,
+    max_tokens: ?i64 = null,
+    temperature: ?f64 = null,
+    context_window: ?i64 = null,
+    /// Name of the env var holding the provider API key.
+    api_key_env: ?[]const u8 = null,
+    base_url: ?[]const u8 = null,
+    /// Allowlist of MCP server names to attach. Empty → attach all of
+    /// `mcp_servers`. Names without a definition are assumed defined elsewhere
+    /// (installed plugins / per-target passthrough).
+    mcp: []const []const u8 = &.{},
+    /// MCP server *definitions*: { "<name>": { command|url, args, env, headers,
+    /// type } }. Raw JSON so emitters can map each runtime's native shape.
+    mcp_servers: ?std.json.Value = null,
+    tools: ?Tools = null,
+    permissions: ?Permissions = null,
+    sandbox: ?Sandbox = null,
+    memory: ?Memory = null,
+    multiagent: ?Multiagent = null,
+    /// Arbitrary key/value tracking data (raw).
+    metadata: ?std.json.Value = null,
+    /// Per-runtime raw passthrough config: { "<runtime>": { ... } }.
+    targets: ?std.json.Value = null,
 };
 
-const PROVIDER_VALUES = [_][]const u8{ "openrouter", "anthropic", "openai", "local" };
-const THINKING_VALUES = [_][]const u8{ "off", "minimal", "low", "medium", "high" };
+const PROVIDER_VALUES = [_][]const u8{
+    // generic / current
+    "openrouter", "anthropic", "openai",   "local",
+    // common managed-agent providers across pi / hermes / openclaw
+    "google",     "gemini",    "xai",      "groq",
+    "mistral",    "deepseek",  "bedrock",  "azure",
+    "nous",       "ollama",    "together", "fireworks",
+    "cerebras",   "vertex",    "cohere",   "moonshot",
+    "kimi",       "minimax",   "zai",
+};
+const THINKING_VALUES = [_][]const u8{ "off", "minimal", "low", "medium", "high", "xhigh" };
+const RUNTIME_VALUES = [_][]const u8{ "pi", "claude", "hermes", "openclaw" };
+const SPEED_VALUES = [_][]const u8{ "standard", "fast" };
+const NETWORK_VALUES = [_][]const u8{ "none", "restricted", "all" };
+const SANDBOX_BACKEND_VALUES = [_][]const u8{ "local", "docker", "ssh", "cloud", "anthropic", "modal", "daytona" };
+const PERMISSION_VALUES = [_][]const u8{ "always_allow", "ask", "deny" };
 
 // ---- shared validators ----
 
@@ -69,6 +152,18 @@ fn validateNonEmptyString(value: std.json.Value, diags: *diag.Diagnostics, file:
     }
 }
 
+fn validateEnvIdent(value: std.json.Value, diags: *diag.Diagnostics, file: []const u8, path: []const u8) anyerror!void {
+    if (value != .string) return;
+    if (!isEnvIdent(value.string)) {
+        try diags.err(
+            file,
+            try diags.arena.allocator().dupe(u8, path),
+            "env var must match ^[A-Z_][A-Z0-9_]*$, got '{s}'",
+            .{value.string},
+        );
+    }
+}
+
 fn validateSlug(value: std.json.Value, diags: *diag.Diagnostics, file: []const u8, path: []const u8) anyerror!void {
     if (value != .string) return;
     if (!isSlug(value.string)) {
@@ -92,6 +187,17 @@ fn validateSlugArray(value: std.json.Value, diags: *diag.Diagnostics, file: []co
                 .{ path, i },
             );
             try diags.err(file, owned, "must match slug pattern, got '{s}'", .{item.string});
+        }
+    }
+}
+
+fn validateNonEmptyStringArray(value: std.json.Value, diags: *diag.Diagnostics, file: []const u8, path: []const u8) anyerror!void {
+    if (value != .array) return;
+    for (value.array.items, 0..) |item, i| {
+        if (item != .string) continue;
+        if (item.string.len == 0) {
+            const owned = try std.fmt.allocPrint(diags.arena.allocator(), "{s}[{d}]", .{ path, i });
+            try diags.err(file, owned, "must be non-empty", .{});
         }
     }
 }
@@ -148,11 +254,52 @@ const CAPABILITIES_SCHEMA = [_]json_strict.FieldSpec{
 const ENV_SCHEMA = [_]json_strict.FieldSpec{
     .{ .name = "required", .type = .array, .required = true, .element_type = .string, .validate = validateEnvIdentArray },
     .{ .name = "optional", .type = .array, .required = true, .element_type = .string, .validate = validateEnvIdentArray },
+    .{ .name = "vars", .type = .object },
 };
 
 const SESSION_SCHEMA = [_]json_strict.FieldSpec{
     .{ .name = "export", .type = .boolean },
     .{ .name = "r2_bucket", .type = .string, .validate = validateNonEmptyString },
+};
+
+const TOOLS_SCHEMA = [_]json_strict.FieldSpec{
+    .{ .name = "allow", .type = .array, .element_type = .string, .validate = validateNonEmptyStringArray },
+    .{ .name = "deny", .type = .array, .element_type = .string, .validate = validateNonEmptyStringArray },
+    .{ .name = "builtin", .type = .boolean },
+};
+
+const PERMISSIONS_SCHEMA = [_]json_strict.FieldSpec{
+    .{ .name = "default", .type = .string, .enum_values = &PERMISSION_VALUES },
+    .{ .name = "rules", .type = .object },
+};
+
+const SANDBOX_SCHEMA = [_]json_strict.FieldSpec{
+    .{ .name = "backend", .type = .string, .enum_values = &SANDBOX_BACKEND_VALUES },
+    .{ .name = "image", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "cpu", .type = .integer },
+    .{ .name = "memory", .type = .integer },
+    .{ .name = "network", .type = .string, .enum_values = &NETWORK_VALUES },
+    .{ .name = "workdir", .type = .string, .validate = validateNonEmptyString },
+};
+
+const MEMORY_SCHEMA = [_]json_strict.FieldSpec{
+    .{ .name = "enabled", .type = .boolean },
+    .{ .name = "backend", .type = .string, .validate = validateNonEmptyString },
+};
+
+const MULTIAGENT_SCHEMA = [_]json_strict.FieldSpec{
+    .{ .name = "delegates", .type = .array, .element_type = .string, .validate = validateSlugArray },
+};
+
+const MCP_SERVER_SCHEMA = [_]json_strict.FieldSpec{
+    .{ .name = "command", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "args", .type = .array, .element_type = .string },
+    .{ .name = "env", .type = .object },
+    .{ .name = "url", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "headers", .type = .object },
+    .{ .name = "type", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "timeout", .type = .integer },
+    .{ .name = "connect_timeout", .type = .integer },
 };
 
 pub const AGENT_SCHEMA: []const json_strict.FieldSpec = &[_]json_strict.FieldSpec{
@@ -165,6 +312,25 @@ pub const AGENT_SCHEMA: []const json_strict.FieldSpec = &[_]json_strict.FieldSpe
     .{ .name = "capabilities", .type = .object, .required = true, .nested = &CAPABILITIES_SCHEMA },
     .{ .name = "env", .type = .object, .required = true, .nested = &ENV_SCHEMA },
     .{ .name = "session", .type = .object, .nested = &SESSION_SCHEMA },
+
+    // superset (optional)
+    .{ .name = "runtime", .type = .string, .enum_values = &RUNTIME_VALUES },
+    .{ .name = "system", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "speed", .type = .string, .enum_values = &SPEED_VALUES },
+    .{ .name = "max_tokens", .type = .integer },
+    .{ .name = "temperature", .type = .number },
+    .{ .name = "context_window", .type = .integer },
+    .{ .name = "api_key_env", .type = .string, .validate = validateEnvIdent },
+    .{ .name = "base_url", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "mcp", .type = .array, .element_type = .string, .validate = validateSlugArray },
+    .{ .name = "mcp_servers", .type = .object, .map_value_nested = &MCP_SERVER_SCHEMA },
+    .{ .name = "tools", .type = .object, .nested = &TOOLS_SCHEMA },
+    .{ .name = "permissions", .type = .object, .nested = &PERMISSIONS_SCHEMA },
+    .{ .name = "sandbox", .type = .object, .nested = &SANDBOX_SCHEMA },
+    .{ .name = "memory", .type = .object, .nested = &MEMORY_SCHEMA },
+    .{ .name = "multiagent", .type = .object, .nested = &MULTIAGENT_SCHEMA },
+    .{ .name = "metadata", .type = .object },
+    .{ .name = "targets", .type = .object },
 };
 
 // ---- parse ----
@@ -172,6 +338,29 @@ pub const AGENT_SCHEMA: []const json_strict.FieldSpec = &[_]json_strict.FieldSpe
 fn getString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const v = obj.get(key) orelse return null;
     return if (v == .string) v.string else null;
+}
+
+fn getBool(obj: std.json.ObjectMap, key: []const u8) ?bool {
+    const v = obj.get(key) orelse return null;
+    return if (v == .bool) v.bool else null;
+}
+
+fn getInt(obj: std.json.ObjectMap, key: []const u8) ?i64 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .integer => |i| i,
+        .float => |f| if (@floor(f) == f) @as(i64, @intFromFloat(f)) else null,
+        else => null,
+    };
+}
+
+fn getFloat(obj: std.json.ObjectMap, key: []const u8) ?f64 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .float => |f| f,
+        .integer => |i| @floatFromInt(i),
+        else => null,
+    };
 }
 
 fn getStringArray(allocator: std.mem.Allocator, obj: std.json.ObjectMap, key: []const u8) ![]const []const u8 {
@@ -209,6 +398,7 @@ pub fn parseAgent(
     const env: Env = .{
         .required = try getStringArray(allocator, env_obj, "required"),
         .optional = try getStringArray(allocator, env_obj, "optional"),
+        .vars = env_obj.get("vars"),
     };
 
     var session: ?Session = null;
@@ -224,6 +414,50 @@ pub fn parseAgent(
         }
     }
 
+    var tools: ?Tools = null;
+    if (root.get("tools")) |tv| if (tv == .object) {
+        tools = Tools{
+            .allow = try getStringArray(allocator, tv.object, "allow"),
+            .deny = try getStringArray(allocator, tv.object, "deny"),
+            .builtin = getBool(tv.object, "builtin"),
+        };
+    };
+
+    var permissions: ?Permissions = null;
+    if (root.get("permissions")) |pv| if (pv == .object) {
+        permissions = Permissions{
+            .default = getString(pv.object, "default"),
+            .rules = pv.object.get("rules"),
+        };
+    };
+
+    var sandbox: ?Sandbox = null;
+    if (root.get("sandbox")) |sv| if (sv == .object) {
+        sandbox = Sandbox{
+            .backend = getString(sv.object, "backend"),
+            .image = getString(sv.object, "image"),
+            .cpu = getInt(sv.object, "cpu"),
+            .memory = getInt(sv.object, "memory"),
+            .network = getString(sv.object, "network"),
+            .workdir = getString(sv.object, "workdir"),
+        };
+    };
+
+    var memory: ?Memory = null;
+    if (root.get("memory")) |mv| if (mv == .object) {
+        memory = Memory{
+            .enabled = getBool(mv.object, "enabled"),
+            .backend = getString(mv.object, "backend"),
+        };
+    };
+
+    var multiagent: ?Multiagent = null;
+    if (root.get("multiagent")) |mv| if (mv == .object) {
+        multiagent = Multiagent{
+            .delegates = try getStringArray(allocator, mv.object, "delegates"),
+        };
+    };
+
     return Agent{
         .name = root.get("name").?.string,
         .description = root.get("description").?.string,
@@ -234,5 +468,27 @@ pub fn parseAgent(
         .capabilities = caps,
         .env = env,
         .session = session,
+        .runtime = getString(root, "runtime"),
+        .system = getString(root, "system"),
+        .speed = getString(root, "speed"),
+        .max_tokens = getInt(root, "max_tokens"),
+        .temperature = getFloat(root, "temperature"),
+        .context_window = getInt(root, "context_window"),
+        .api_key_env = getString(root, "api_key_env"),
+        .base_url = getString(root, "base_url"),
+        .mcp = try getStringArray(allocator, root, "mcp"),
+        .mcp_servers = root.get("mcp_servers"),
+        .tools = tools,
+        .permissions = permissions,
+        .sandbox = sandbox,
+        .memory = memory,
+        .multiagent = multiagent,
+        .metadata = root.get("metadata"),
+        .targets = root.get("targets"),
     };
+}
+
+/// Resolve the effective runtime for an agent (default: pi).
+pub fn effectiveRuntime(agent: Agent) []const u8 {
+    return agent.runtime orelse "pi";
 }

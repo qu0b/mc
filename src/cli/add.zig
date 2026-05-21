@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const args_mod = @import("args.zig");
 const render = @import("render.zig");
 const sandbox = @import("../core/sandbox.zig");
@@ -12,7 +12,7 @@ const git_mod = @import("../fetch/git.zig");
 const github_mod = @import("../fetch/github.zig");
 const cache_store = @import("../cache/store.zig");
 const hash_mod = @import("../io/hash.zig");
-const core_compat = @import("../core/compat.zig");
+const core_compat = @import("compat");
 const diag = @import("diagnostic");
 
 pub fn execute(allocator: std.mem.Allocator, opts: args_mod.AddOpts) !void {
@@ -132,10 +132,10 @@ fn renderDiagnostics(
     w: *compat.OutWriter,
     diags: *const diag.Diagnostics,
 ) !void {
-    var buf: std.ArrayList(u8) = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    try diags.render(buf.writer());
-    w.writeAll(buf.items);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    try diags.render(&aw.writer);
+    w.writeAll(aw.writer.buffered());
 }
 
 fn addDirect(

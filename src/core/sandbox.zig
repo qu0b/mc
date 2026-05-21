@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const manifest_mod = @import("manifest.zig");
 const config_mod = @import("config.zig");
 

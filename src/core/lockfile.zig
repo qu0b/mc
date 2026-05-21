@@ -1,6 +1,6 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
-const json_mod = @import("../io/json.zig");
+const compat = @import("iocompat");
+const json_mod = @import("json");
 const writer_mod = @import("../io/writer.zig");
 
 /// mc.lock format for reproducible installs.

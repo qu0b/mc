@@ -167,7 +167,7 @@ test "multiple errors across fields all captured" {
         \\  "name": "Bad-Case",
         \\  "description": "",
         \\  "model": "m",
-        \\  "provider": "gemini",
+        \\  "provider": "not-a-provider",
         \\  "thinking": "turbo",
         \\  "prompt": "",
         \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
@@ -200,4 +200,158 @@ test "session field accepts partial config" {
     try std.testing.expect(a.?.session != null);
     try std.testing.expectEqual(true, a.?.session.?.@"export".?);
     try std.testing.expectEqualStrings("my-bucket", a.?.session.?.r2_bucket.?);
+}
+
+// ---- superset (managed-agent) fields ----
+
+test "minimal agent has no superset fields and defaults runtime to pi" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var d = diag.Diagnostics.init(std.testing.allocator);
+    defer d.deinit();
+
+    const a = (try agent.parseAgent(arena.allocator(), "agent.json", VALID_MINIMAL, &d)).?;
+    try std.testing.expect(a.runtime == null);
+    try std.testing.expect(a.system == null);
+    try std.testing.expect(a.tools == null);
+    try std.testing.expect(a.sandbox == null);
+    try std.testing.expect(a.metadata == null);
+    try std.testing.expect(a.targets == null);
+    try std.testing.expectEqualStrings("pi", agent.effectiveRuntime(a));
+}
+
+const VALID_SUPERSET =
+    \\{
+    \\  "name": "reviewer",
+    \\  "description": "Reviews PRs",
+    \\  "model": "claude-opus-4-7",
+    \\  "provider": "anthropic",
+    \\  "thinking": "high",
+    \\  "prompt": "./prompt.md",
+    \\  "capabilities": { "skills": ["review"], "commands": [], "extensions": [], "toolset": "read-only" },
+    \\  "env": { "required": ["ANTHROPIC_API_KEY"], "optional": [], "vars": { "FOO": "bar" } },
+    \\  "runtime": "claude",
+    \\  "system": "You are careful.",
+    \\  "speed": "fast",
+    \\  "max_tokens": 8192,
+    \\  "temperature": 0.2,
+    \\  "context_window": 200000,
+    \\  "api_key_env": "ANTHROPIC_API_KEY",
+    \\  "base_url": "https://api.anthropic.com",
+    \\  "mcp": ["linear", "github"],
+    \\  "tools": { "allow": ["read", "grep"], "deny": ["bash"], "builtin": true },
+    \\  "permissions": { "default": "ask", "rules": { "read": "always_allow" } },
+    \\  "sandbox": { "backend": "anthropic", "image": "node:22", "cpu": 2, "memory": 4096, "network": "restricted", "workdir": "/workspace" },
+    \\  "memory": { "enabled": true, "backend": "store" },
+    \\  "multiagent": { "delegates": ["researcher", "tester"] },
+    \\  "metadata": { "team": "infra" },
+    \\  "targets": { "claude": { "mcp_servers": [] }, "hermes": { "terminal": { "backend": "docker" } } }
+    \\}
+;
+
+test "full superset agent parses every field" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var d = diag.Diagnostics.init(std.testing.allocator);
+    defer d.deinit();
+
+    const a = (try agent.parseAgent(arena.allocator(), "agent.json", VALID_SUPERSET, &d)) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(!d.hasErrors());
+
+    try std.testing.expectEqualStrings("claude", a.runtime.?);
+    try std.testing.expectEqualStrings("claude", agent.effectiveRuntime(a));
+    try std.testing.expectEqualStrings("You are careful.", a.system.?);
+    try std.testing.expectEqualStrings("fast", a.speed.?);
+    try std.testing.expectEqual(@as(i64, 8192), a.max_tokens.?);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.2), a.temperature.?, 0.0001);
+    try std.testing.expectEqual(@as(i64, 200000), a.context_window.?);
+    try std.testing.expectEqualStrings("ANTHROPIC_API_KEY", a.api_key_env.?);
+    try std.testing.expectEqualStrings("https://api.anthropic.com", a.base_url.?);
+
+    try std.testing.expectEqual(@as(usize, 2), a.mcp.len);
+    try std.testing.expectEqualStrings("linear", a.mcp[0]);
+
+    try std.testing.expect(a.tools != null);
+    try std.testing.expectEqual(@as(usize, 2), a.tools.?.allow.len);
+    try std.testing.expectEqual(@as(usize, 1), a.tools.?.deny.len);
+    try std.testing.expectEqual(true, a.tools.?.builtin.?);
+
+    try std.testing.expectEqualStrings("ask", a.permissions.?.default.?);
+    try std.testing.expect(a.permissions.?.rules != null);
+
+    try std.testing.expectEqualStrings("anthropic", a.sandbox.?.backend.?);
+    try std.testing.expectEqual(@as(i64, 2), a.sandbox.?.cpu.?);
+    try std.testing.expectEqual(@as(i64, 4096), a.sandbox.?.memory.?);
+    try std.testing.expectEqualStrings("restricted", a.sandbox.?.network.?);
+
+    try std.testing.expectEqual(true, a.memory.?.enabled.?);
+    try std.testing.expectEqual(@as(usize, 2), a.multiagent.?.delegates.len);
+    try std.testing.expect(a.metadata != null);
+    try std.testing.expect(a.targets != null);
+    try std.testing.expect(a.env.vars != null);
+}
+
+test "extended providers accepted (google/xai/bedrock)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{ "google", "xai", "bedrock", "groq" }) |prov| {
+        var d = diag.Diagnostics.init(std.testing.allocator);
+        defer d.deinit();
+        const src = try std.fmt.allocPrint(arena.allocator(),
+            \\{{
+            \\  "name": "x", "description": "x", "model": "m",
+            \\  "provider": "{s}", "thinking": "off", "prompt": "p",
+            \\  "capabilities": {{ "skills": [], "commands": [], "extensions": [], "toolset": "x" }},
+            \\  "env": {{ "required": [], "optional": [] }}
+            \\}}
+        , .{prov});
+        const a = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
+        try std.testing.expect(a != null);
+        try std.testing.expect(!d.hasErrors());
+    }
+}
+
+test "bogus runtime / sandbox.network / permissions.default rejected by enum" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var d = diag.Diagnostics.init(std.testing.allocator);
+    defer d.deinit();
+
+    const src =
+        \\{
+        \\  "name": "x", "description": "x", "model": "m",
+        \\  "provider": "anthropic", "thinking": "off", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "runtime": "wrenchbot",
+        \\  "sandbox": { "network": "wide-open" },
+        \\  "permissions": { "default": "maybe" }
+        \\}
+    ;
+    _ = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
+    try std.testing.expectEqual(@as(usize, 1), pathCount(&d, "runtime"));
+    try std.testing.expectEqual(@as(usize, 1), pathCount(&d, "sandbox.network"));
+    try std.testing.expectEqual(@as(usize, 1), pathCount(&d, "permissions.default"));
+}
+
+test "unknown superset key is still reported (strict)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var d = diag.Diagnostics.init(std.testing.allocator);
+    defer d.deinit();
+
+    const src =
+        \\{
+        \\  "name": "x", "description": "x", "model": "m",
+        \\  "provider": "anthropic", "thinking": "off", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "runtimes": "claude"
+        \\}
+    ;
+    _ = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
+    try std.testing.expect(messagesContain(&d, "unknown key 'runtimes'"));
 }

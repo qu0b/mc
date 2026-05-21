@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const hash_mod = @import("../io/hash.zig");
 const config_mod = @import("../core/config.zig");
 
@@ -69,17 +69,17 @@ pub const ContentStore = struct {
         var dir = compat.openDirAbsolute(self.root) catch return &.{};
         defer dir.close(compat.getIo());
 
-        var entries = std.ArrayList(CacheEntry).init(allocator);
+        var entries: std.ArrayList(CacheEntry) = .empty;
         var iter = compat.iterateDir(dir);
         while (try iter.next()) |entry| {
             if (entry.kind == .directory and std.mem.startsWith(u8, entry.name, "sha256-")) {
-                try entries.append(.{
+                try entries.append(allocator, .{
                     .hash = try allocator.dupe(u8, entry.name[7..]),
                     .path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ self.root, entry.name }),
                 });
             }
         }
-        return entries.toOwnedSlice();
+        return entries.toOwnedSlice(allocator);
     }
 };
 

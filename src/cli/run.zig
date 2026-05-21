@@ -20,6 +20,7 @@ const toolset_schema = @import("toolset");
 const agent_resolver = @import("agent_resolver");
 const toolset_resolver = @import("toolset_resolver");
 const materialize = @import("materialize");
+const compat = @import("iocompat");
 
 pub const RunOpts = struct {
     agent_name: []const u8,
@@ -69,7 +70,7 @@ pub fn buildCommand(
     project_root: []const u8,
     opts: RunOpts,
     diags: *diag.Diagnostics,
-    env_override: ?*const std.process.EnvMap,
+    env_override: ?*const std.StringHashMap([]const u8),
 ) !ResolvedCommand {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
@@ -77,7 +78,7 @@ pub fn buildCommand(
 
     // 1. sandbox
     const mc_marker = try std.fmt.allocPrint(a, "{s}/.mc/mc.json", .{project_root});
-    std.fs.accessAbsolute(mc_marker, .{}) catch {
+    compat.accessAbsolute(mc_marker) catch {
         try diags.err(project_root, "", "not an mc sandbox (no .mc/mc.json)", .{});
         return error.NotASandbox;
     };
@@ -93,14 +94,14 @@ pub fn buildCommand(
 
     // Agent dir must exist.
     {
-        var d = std.fs.openDirAbsolute(agent_dir, .{}) catch {
+        var d = compat.openDirAbsoluteNoIter(agent_dir) catch {
             try diags.err(agent_file_rel, "", "agent directory not found: {s}", .{agent_dir});
             return error.AgentDirMissing;
         };
-        d.close();
+        d.close(compat.getIo());
     }
 
-    const src = std.fs.cwd().readFileAlloc(a, agent_file_abs, 1 << 20) catch {
+    const src = compat.readFile(a, agent_file_abs) catch {
         try diags.err(agent_file_rel, "", "agent.json not found or unreadable", .{});
         return error.AgentFileMissing;
     };
@@ -147,12 +148,12 @@ pub fn buildCommand(
     ) catch return error.ToolsetResolveFailed;
 
     // 6. env var check
-    var missing = std.ArrayList([]const u8).init(a);
+    var missing: std.ArrayList([]const u8) = .empty;
     var env_ok = true;
     for (agent.env.required) |name| {
         if (!envHas(a, name, env_override)) {
             env_ok = false;
-            try missing.append(try a.dupe(u8, name));
+            try missing.append(a, try a.dupe(u8, name));
             try diags.err(agent_file_rel, "env.required", "required env var not set: {s}", .{name});
         }
     }
@@ -160,7 +161,7 @@ pub fn buildCommand(
 
     // 7. prompt content
     const prompt_abs = try std.fs.path.join(a, &.{ agent_dir, agent.prompt });
-    const prompt_text = std.fs.cwd().readFileAlloc(a, prompt_abs, 1 << 22) catch {
+    const prompt_text = compat.readFile(a, prompt_abs) catch {
         try diags.err(agent_file_rel, "prompt", "prompt file not readable: {s}", .{prompt_abs});
         return error.PromptFileMissing;
     };
@@ -192,7 +193,7 @@ pub fn buildCommand(
         .prompt = prompt_text,
         .runtime_dir = runtime_dir,
         .env_ok = env_ok,
-        .missing_env = try missing.toOwnedSlice(),
+        .missing_env = try missing.toOwnedSlice(a),
     };
 }
 
@@ -201,7 +202,7 @@ pub fn buildCommand(
 /// not return.
 pub fn execute(allocator: std.mem.Allocator, opts: RunOpts) !void {
     // Resolve cwd → absolute project_root.
-    const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_abs = try compat.getCwdAlloc(allocator);
     defer allocator.free(cwd_abs);
 
     var diags = diag.Diagnostics.init(allocator);
@@ -209,16 +210,18 @@ pub fn execute(allocator: std.mem.Allocator, opts: RunOpts) !void {
 
     var cmd = buildCommand(allocator, cwd_abs, opts, &diags, null) catch |e| {
         // Render whatever diagnostics accumulated.
-        const stderr = std.io.getStdErr().writer();
-        diags.render(stderr) catch {};
+        var ew = compat.getStderr();
+        diags.render(&ew.file_writer.interface) catch {};
+        ew.flush();
         return e;
     };
     defer cmd.deinit();
 
     // Render any warnings (no errors, else buildCommand would have failed).
     if (diags.count() > 0) {
-        const stderr = std.io.getStdErr().writer();
-        diags.render(stderr) catch {};
+        var ew = compat.getStderr();
+        diags.render(&ew.file_writer.interface) catch {};
+        ew.flush();
     }
 
     if (opts.dry_run) {
@@ -226,8 +229,10 @@ pub fn execute(allocator: std.mem.Allocator, opts: RunOpts) !void {
         return;
     }
 
-    // Exec-replace.  execv never returns on success.
-    return std.process.execv(allocator, cmd.argv);
+    // Run pi inheriting stdio, then exit with its code (spawn+wait replaces
+    // the old exec-replace; std.process.execv is gone in this std).
+    const code = try compat.execReplace(cmd.argv);
+    std.process.exit(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,38 +248,38 @@ fn assembleArgv(
     prompt_text: []const u8,
     extra: []const []const u8,
 ) ![]const []const u8 {
-    var list = std.ArrayList([]const u8).init(a);
+    var list: std.ArrayList([]const u8) = .empty;
 
-    try list.append(try a.dupe(u8, "pi"));
+    try list.append(a, try a.dupe(u8, "pi"));
 
-    try list.append(try a.dupe(u8, "-p"));
-    try list.append(try a.dupe(u8, prompt_text));
+    try list.append(a, try a.dupe(u8, "-p"));
+    try list.append(a, try a.dupe(u8, prompt_text));
 
-    try list.append(try a.dupe(u8, "--provider"));
-    try list.append(try a.dupe(u8, agent.provider));
+    try list.append(a, try a.dupe(u8, "--provider"));
+    try list.append(a, try a.dupe(u8, agent.provider));
 
-    try list.append(try a.dupe(u8, "--model"));
-    try list.append(try a.dupe(u8, agent.model));
+    try list.append(a, try a.dupe(u8, "--model"));
+    try list.append(a, try a.dupe(u8, agent.model));
 
-    try list.append(try a.dupe(u8, "--thinking"));
-    try list.append(try a.dupe(u8, agent.thinking));
+    try list.append(a, try a.dupe(u8, "--thinking"));
+    try list.append(a, try a.dupe(u8, agent.thinking));
 
-    try list.append(try a.dupe(u8, "--tools"));
-    try list.append(try joinCSV(a, tools));
+    try list.append(a, try a.dupe(u8, "--tools"));
+    try list.append(a, try joinCSV(a, tools));
 
     // Explicit loadout: never auto-load other skills/extensions.
-    try list.append(try a.dupe(u8, "--no-skills"));
-    try list.append(try a.dupe(u8, "--no-extensions"));
+    try list.append(a, try a.dupe(u8, "--no-skills"));
+    try list.append(a, try a.dupe(u8, "--no-extensions"));
 
     // One --skill <runtime_dir>/<cap> per materialized capability.
     for (cap_names) |cap| {
-        try list.append(try a.dupe(u8, "--skill"));
-        try list.append(try std.fs.path.join(a, &.{ runtime_dir, cap }));
+        try list.append(a, try a.dupe(u8, "--skill"));
+        try list.append(a, try std.fs.path.join(a, &.{ runtime_dir, cap }));
     }
 
-    for (extra) |e| try list.append(try a.dupe(u8, e));
+    for (extra) |e| try list.append(a, try a.dupe(u8, e));
 
-    return list.toOwnedSlice();
+    return list.toOwnedSlice(a);
 }
 
 fn joinCSV(a: std.mem.Allocator, items: []const []const u8) ![]u8 {
@@ -302,15 +307,11 @@ fn joinCSV(a: std.mem.Allocator, items: []const []const u8) ![]u8 {
 fn envHas(
     allocator: std.mem.Allocator,
     name: []const u8,
-    env_override: ?*const std.process.EnvMap,
+    env_override: ?*const std.StringHashMap([]const u8),
 ) bool {
+    _ = allocator;
     if (env_override) |m| return m.get(name) != null;
-    const v = std.process.getEnvVarOwned(allocator, name) catch |e| switch (e) {
-        error.EnvironmentVariableNotFound => return false,
-        else => return false,
-    };
-    allocator.free(v);
-    return true;
+    return compat.hasEnvVar(name);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,19 +330,19 @@ fn findToolsetsJson(
     const candidates = [_][]const u8{ "toolsets.json", ".mc/toolsets.json" };
     for (candidates) |rel| {
         const abs = try std.fmt.allocPrint(a, "{s}/{s}", .{ project_root, rel });
-        if (std.fs.cwd().readFileAlloc(a, abs, 1 << 20)) |data| {
+        if (compat.readFile(a, abs)) |data| {
             return .{ .rel_label = try a.dupe(u8, rel), .contents = data };
         } else |_| {}
     }
 
     const plugins = try std.fmt.allocPrint(a, "{s}/.mc/plugins", .{project_root});
-    var dir = std.fs.openDirAbsolute(plugins, .{ .iterate = true }) catch return null;
-    defer dir.close();
-    var it = dir.iterate();
+    var dir = compat.openDirAbsolute(plugins) catch return null;
+    defer dir.close(compat.getIo());
+    var it = compat.iterateDir(dir);
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
         const abs = try std.fmt.allocPrint(a, "{s}/{s}/toolsets.json", .{ plugins, entry.name });
-        if (std.fs.cwd().readFileAlloc(a, abs, 1 << 20)) |data| {
+        if (compat.readFile(a, abs)) |data| {
             const label = try std.fmt.allocPrint(a, ".mc/plugins/{s}/toolsets.json", .{entry.name});
             return .{ .rel_label = label, .contents = data };
         } else |_| {}
@@ -354,7 +355,9 @@ fn findToolsetsJson(
 // ---------------------------------------------------------------------------
 
 fn printDryRun(cmd: ResolvedCommand) !void {
-    const stdout = std.io.getStdOut().writer();
+    var ow = compat.getStdout();
+    defer ow.flush();
+    const stdout = &ow.file_writer.interface;
     try stdout.writeAll("# pi command (dry-run)\n");
     for (cmd.argv, 0..) |arg, i| {
         // For the prompt value (argv[2] after "pi", "-p") we print a short

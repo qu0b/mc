@@ -2,6 +2,7 @@ const std = @import("std");
 const diag = @import("diagnostic");
 const agent_schema = @import("agent");
 const toolset_schema = @import("toolset");
+const compat = @import("iocompat");
 
 /// Context required to cross-validate a parsed agent against the project
 /// layout (installed capabilities, toolset registry, on-disk prompt file).
@@ -103,7 +104,7 @@ pub fn validate(
         &.{ ctx.agent_dir, agent.prompt },
     );
     defer allocator.free(prompt_abs);
-    std.fs.accessAbsolute(prompt_abs, .{}) catch {
+    compat.accessAbsolute(prompt_abs) catch {
         const path = try diags.arena.allocator().dupe(u8, "prompt");
         const msg_path = try diags.arena.allocator().dupe(u8, prompt_abs);
         try diags.err(agent_file, path, "prompt file not found: {s}", .{msg_path});
@@ -137,7 +138,7 @@ pub fn validateAgentInProject(
 
     // 1. Must be a sandbox.
     const mc_marker = try std.fmt.allocPrint(arena, "{s}/.mc/mc.json", .{project_root});
-    std.fs.accessAbsolute(mc_marker, .{}) catch {
+    compat.accessAbsolute(mc_marker) catch {
         try diags.err(project_root, "", "not an mc sandbox (no .mc/mc.json)", .{});
         return false;
     };
@@ -155,7 +156,7 @@ pub fn validateAgentInProject(
         .{agent_name},
     );
 
-    const src = std.fs.cwd().readFileAlloc(arena, agent_file_abs, 1 << 20) catch {
+    const src = compat.readFile(arena, agent_file_abs) catch {
         try diags.err(agent_file_rel, "", "agent.json not found or unreadable", .{});
         return false;
     };
@@ -212,7 +213,7 @@ fn findToolsetsJson(
     for (candidates) |rel| {
         const abs = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ project_root, rel });
         defer allocator.free(abs);
-        if (std.fs.cwd().readFileAlloc(allocator, abs, 1 << 20)) |data| {
+        if (compat.readFile(allocator, abs)) |data| {
             return .{
                 .rel_file = try diags.arena.allocator().dupe(u8, rel),
                 .contents = data,
@@ -227,10 +228,10 @@ fn findToolsetsJson(
         .{project_root},
     );
     defer allocator.free(plugins_dir_path);
-    var plugins_dir = std.fs.openDirAbsolute(plugins_dir_path, .{ .iterate = true }) catch return null;
-    defer plugins_dir.close();
+    var plugins_dir = compat.openDirAbsolute(plugins_dir_path) catch return null;
+    defer plugins_dir.close(compat.getIo());
 
-    var it = plugins_dir.iterate();
+    var it = compat.iterateDir(plugins_dir);
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
         const abs = try std.fmt.allocPrint(
@@ -239,7 +240,7 @@ fn findToolsetsJson(
             .{ plugins_dir_path, entry.name },
         );
         defer allocator.free(abs);
-        if (std.fs.cwd().readFileAlloc(allocator, abs, 1 << 20)) |data| {
+        if (compat.readFile(allocator, abs)) |data| {
             const label = try std.fmt.allocPrint(
                 diags.arena.allocator(),
                 ".mc/plugins/{s}/toolsets.json",
@@ -265,16 +266,16 @@ fn listInstalledCapabilities(
     );
     defer allocator.free(plugins_dir);
 
-    var dir = std.fs.openDirAbsolute(plugins_dir, .{ .iterate = true }) catch {
+    var dir = compat.openDirAbsolute(plugins_dir) catch {
         return allocator.alloc([]const u8, 0);
     };
-    defer dir.close();
+    defer dir.close(compat.getIo());
 
-    var names = std.ArrayList([]const u8).init(allocator);
-    var it = dir.iterate();
+    var names: std.ArrayList([]const u8) = .empty;
+    var it = compat.iterateDir(dir);
     while (try it.next()) |entry| {
         if (entry.kind != .directory) continue;
-        try names.append(try allocator.dupe(u8, entry.name));
+        try names.append(allocator, try allocator.dupe(u8, entry.name));
     }
-    return names.toOwnedSlice();
+    return names.toOwnedSlice(allocator);
 }

@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const source_mod = @import("../schema/source.zig");
 const git_mod = @import("git.zig");
 const github_mod = @import("github.zig");

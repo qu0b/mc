@@ -1,19 +1,21 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const args_mod = @import("args.zig");
 const render = @import("render.zig");
+const agent_schema = @import("agent_schema");
+const emit = @import("emit");
+const diag = @import("diagnostic");
 
 pub fn execute(allocator: std.mem.Allocator, sub: args_mod.AgentSub) !void {
     switch (sub) {
         .new => |opts| try executeNew(allocator, opts),
         .show => |opts| try executeShow(allocator, opts),
+        .emit => |opts| try executeEmit(allocator, opts),
     }
 }
 
 fn executeNew(allocator: std.mem.Allocator, opts: args_mod.AgentNewOpts) !void {
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.posix.getcwd(&cwd_buf);
-    const cwd_dup = try allocator.dupe(u8, cwd);
+    const cwd_dup = try compat.getCwdAlloc(allocator);
 
     var w = compat.getStdout();
     const res = try scaffoldAt(allocator, cwd_dup, opts);
@@ -35,44 +37,47 @@ pub fn scaffoldAt(
     project_dir: []const u8,
     opts: args_mod.AgentNewOpts,
 ) !ScaffoldResult {
-    var root_dir = std.fs.openDirAbsolute(project_dir, .{}) catch return .not_a_sandbox;
-    defer root_dir.close();
-
     // Sandbox check: .mc/mc.json must exist under project_dir.
-    if (root_dir.access(".mc/mc.json", .{})) |_| {} else |_| return .not_a_sandbox;
+    const marker = try std.fmt.allocPrint(allocator, "{s}/.mc/mc.json", .{project_dir});
+    defer allocator.free(marker);
+    compat.accessAbsolute(marker) catch return .not_a_sandbox;
 
     if (!isValidSlug(opts.name)) return .invalid_name;
 
     // Create agents/ (idempotent) and agents/<name>/ (must not exist).
-    root_dir.makeDir("agents") catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => return e,
-    };
+    const agents_dir = try std.fmt.allocPrint(allocator, "{s}/agents", .{project_dir});
+    defer allocator.free(agents_dir);
+    compat.makeDirAbsolute(agents_dir) catch {}; // idempotent
 
-    var agents_dir = try root_dir.openDir("agents", .{});
-    defer agents_dir.close();
+    const agent_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ agents_dir, opts.name });
+    defer allocator.free(agent_dir);
 
     // Refuse to overwrite.
-    if (agents_dir.access(opts.name, .{})) |_| {
+    if (compat.accessAbsolute(agent_dir)) |_| {
         return .already_exists;
     } else |_| {}
 
-    try agents_dir.makeDir(opts.name);
-    var agent_dir = try agents_dir.openDir(opts.name, .{});
-    defer agent_dir.close();
+    try compat.makeDirAbsolute(agent_dir);
 
-    try agent_dir.makeDir("overrides");
-    var overrides_dir = try agent_dir.openDir("overrides", .{});
-    defer overrides_dir.close();
-    try overrides_dir.writeFile(.{ .sub_path = ".gitkeep", .data = "" });
+    const overrides_dir = try std.fmt.allocPrint(allocator, "{s}/overrides", .{agent_dir});
+    defer allocator.free(overrides_dir);
+    try compat.makeDirAbsolute(overrides_dir);
+
+    const gitkeep = try std.fmt.allocPrint(allocator, "{s}/.gitkeep", .{overrides_dir});
+    defer allocator.free(gitkeep);
+    try compat.writeFileAtPath(gitkeep, "");
 
     const prompt = try renderPrompt(allocator, opts.name);
     defer allocator.free(prompt);
-    try agent_dir.writeFile(.{ .sub_path = "prompt.md", .data = prompt });
+    const prompt_path = try std.fmt.allocPrint(allocator, "{s}/prompt.md", .{agent_dir});
+    defer allocator.free(prompt_path);
+    try compat.writeFileAtPath(prompt_path, prompt);
 
     const agent_json = try renderAgentJson(allocator, opts);
     defer allocator.free(agent_json);
-    try agent_dir.writeFile(.{ .sub_path = "agent.json", .data = agent_json });
+    const agent_json_path = try std.fmt.allocPrint(allocator, "{s}/agent.json", .{agent_dir});
+    defer allocator.free(agent_json_path);
+    try compat.writeFileAtPath(agent_json_path, agent_json);
 
     return .created;
 }
@@ -174,6 +179,82 @@ pub fn renderAgentJson(allocator: std.mem.Allocator, opts: args_mod.AgentNewOpts
 }
 
 // ============================================================
+// `mc agent emit <name> [--target …]` — translate to a runtime's native config
+// ============================================================
+
+fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void {
+    var w = compat.getStdout();
+    defer w.flush();
+
+    const cwd = try compat.getCwdAlloc(allocator);
+
+    const marker = try std.fmt.allocPrint(allocator, "{s}/.mc/mc.json", .{cwd});
+    compat.accessAbsolute(marker) catch {
+        render.err(&w, "Not an mc project");
+        w.writeAll(". Run 'mc init' first.\n");
+        return;
+    };
+
+    const agent_dir = try std.fmt.allocPrint(allocator, "{s}/agents/{s}", .{ cwd, opts.name });
+    const agent_json_path = try std.fmt.allocPrint(allocator, "{s}/agent.json", .{agent_dir});
+    const src = compat.readFile(allocator, agent_json_path) catch {
+        render.err(&w, "Agent not found");
+        w.print(": agents/{s}/agent.json\n", .{opts.name});
+        return;
+    };
+
+    var diags = diag.Diagnostics.init(allocator);
+    defer diags.deinit();
+    const ag = (try agent_schema.parseAgent(allocator, agent_json_path, src, &diags)) orelse {
+        var ew = compat.getStderr();
+        diags.render(&ew.file_writer.interface) catch {};
+        ew.flush();
+        return;
+    };
+
+    // The prompt file is the system-prompt fallback when `system` is unset.
+    const prompt_abs = try std.fs.path.join(allocator, &.{ agent_dir, ag.prompt });
+    const prompt_text = compat.readFile(allocator, prompt_abs) catch "";
+
+    const target_name = opts.target orelse agent_schema.effectiveRuntime(ag);
+    const target = emit.parseTarget(target_name) orelse {
+        render.err(&w, "Unknown target");
+        w.print(": '{s}' (expected: claude | openclaw | pi)\n", .{target_name});
+        return;
+    };
+
+    switch (target) {
+        .claude => {
+            const out = try emit.emitClaude(allocator, ag, prompt_text);
+            w.writeAll(out);
+            w.writeAll("\n");
+        },
+        .openclaw => {
+            const out = try emit.emitOpenclaw(allocator, ag, prompt_text);
+            w.writeAll(out);
+            w.writeAll("\n");
+        },
+        .hermes => {
+            const out = try emit.emitHermes(allocator, ag, prompt_text);
+            w.writeAll(out);
+        },
+        .pi => {
+            w.print("# pi runtime: run 'mc run {s} --dry-run' to preview the full command.\n", .{opts.name});
+        },
+    }
+
+    // Surface any superset fields that the chosen target does not represent,
+    // on stderr so stdout stays clean for piping.
+    const warns = try emit.warnings(allocator, ag, target);
+    if (warns.len > 0) {
+        w.flush();
+        var ew = compat.getStderr();
+        for (warns) |msg| ew.print("warning [{s}]: {s}\n", .{ target_name, msg });
+        ew.flush();
+    }
+}
+
+// ============================================================
 // `mc agent show <name>` — trace renderer
 // ============================================================
 
@@ -186,9 +267,7 @@ pub const ShowResult = enum {
 
 /// Production entry point. Resolves cwd, writes to stdout.
 fn executeShow(allocator: std.mem.Allocator, opts: args_mod.AgentShowOpts) !void {
-    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = try std.posix.getcwd(&cwd_buf);
-    const cwd_dup = try allocator.dupe(u8, cwd);
+    const cwd_dup = try compat.getCwdAlloc(allocator);
     defer allocator.free(cwd_dup);
 
     var w = compat.getStdout();
@@ -208,12 +287,9 @@ pub fn executeShowWriter(
 ) !ShowResult {
     // 1. Sandbox check.
     {
-        var root_dir = std.fs.openDirAbsolute(project_root, .{}) catch {
-            try writer.writeAll("Not an mc project\n");
-            return .not_a_sandbox;
-        };
-        defer root_dir.close();
-        root_dir.access(".mc/mc.json", .{}) catch {
+        const marker = try std.fs.path.join(allocator, &.{ project_root, ".mc", "mc.json" });
+        defer allocator.free(marker);
+        compat.accessAbsolute(marker) catch {
             try writer.writeAll("Not an mc project\n");
             return .not_a_sandbox;
         };
@@ -225,7 +301,7 @@ pub fn executeShowWriter(
     });
     defer allocator.free(trace_path);
 
-    const bytes = std.fs.cwd().readFileAlloc(allocator, trace_path, 8 * 1024 * 1024) catch |e| switch (e) {
+    const bytes = compat.readFile(allocator, trace_path) catch |e| switch (e) {
         error.FileNotFound => {
             try writer.print(
                 \\No runtime trace for agent '{s}'.

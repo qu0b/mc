@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../io/compat.zig");
+const compat = @import("iocompat");
 const args_mod = @import("args.zig");
 const render = @import("render.zig");
 const init_cmd = @import("init.zig");
@@ -89,6 +89,9 @@ fn printHelp() void {
         \\
         \\AGENT MANAGEMENT:
         \\  agent new <name> [--model M] [--provider P] [--toolset T]   Create a new agent
+        \\  agent show <name>                          Show an agent's materialized file trace
+        \\  agent emit <name> [--target T]             Emit native config for a managed-agent
+        \\                                             runtime (claude | openclaw | hermes | pi)
         \\
         \\AGENT EXECUTION:
         \\  run <agent> [--dry-run] [-- <pi args>]     Run a named agent

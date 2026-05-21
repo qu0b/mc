@@ -1,6 +1,7 @@
 const std = @import("std");
 const diag = @import("diagnostic");
 const agent_schema = @import("agent");
+const compat = @import("iocompat");
 
 pub const Layer = enum(u8) {
     library = 1,
@@ -85,9 +86,9 @@ pub fn materializeAgent(
 
     // 2. Prepare runtime dir: <project_root>/.mc/runtime/<agent.name>/
     const runtime_dir = try std.fs.path.join(a, &.{ project_root, ".mc", "runtime", agent_name });
-    std.fs.cwd().makePath(runtime_dir) catch return error.RuntimeDirCreationFailed;
+    compat.makePathAbsolute(runtime_dir) catch return error.RuntimeDirCreationFailed;
 
-    var traces = std.ArrayList(FileTrace).init(a);
+    var traces: std.ArrayList(FileTrace) = .empty;
     var cap_versions = try a.alloc(?[]const u8, caps_sorted.len);
     const agent_file_rel = try std.fmt.allocPrint(
         diags.arena.allocator(),
@@ -126,7 +127,7 @@ pub fn materializeAgent(
 
         // Prepare per-capability runtime dir.
         const cap_runtime = try std.fs.path.join(a, &.{ runtime_dir, cap });
-        std.fs.cwd().makePath(cap_runtime) catch return error.RuntimeDirCreationFailed;
+        compat.makePathAbsolute(cap_runtime) catch return error.RuntimeDirCreationFailed;
 
         // Track which relative paths have been materialized (for additive passes).
         var done = std.StringHashMap(void).init(allocator);
@@ -186,7 +187,7 @@ pub fn materializeAgent(
         }
     }
 
-    const traces_slice = try traces.toOwnedSlice();
+    const traces_slice = try traces.toOwnedSlice(a);
 
     const result = MaterializeResult{
         .runtime_dir = runtime_dir,
@@ -221,13 +222,13 @@ fn walkAndMaterialize(
     diags: *diag.Diagnostics,
     diag_file: []const u8,
 ) !void {
-    var root = try std.fs.cwd().openDir(library_dir, .{ .iterate = true });
-    defer root.close();
+    var root = try compat.openDirAbsolute(library_dir);
+    defer root.close(compat.getIo());
 
     var walker = try root.walk(allocator);
     defer walker.deinit();
 
-    while (try walker.next()) |entry| {
+    while (try walker.next(compat.getIo())) |entry| {
         if (entry.kind == .directory) {
             // skip .git subtrees; walker will still descend but we can't easily
             // prune. To prune, detect on first visit and simply don't record it.
@@ -275,7 +276,7 @@ fn walkAndMaterialize(
 
         try copyInto(dst_dir, rel, src_abs);
 
-        try traces.append(.{
+        try traces.append(arena, .{
             .capability = try arena.dupe(u8, cap),
             .relative_path = rel,
             .layer = layer,
@@ -301,13 +302,13 @@ fn walkAdditive(
     diags: *diag.Diagnostics,
     diag_file: []const u8,
 ) !void {
-    var root = try std.fs.cwd().openDir(src_dir, .{ .iterate = true });
-    defer root.close();
+    var root = try compat.openDirAbsolute(src_dir);
+    defer root.close(compat.getIo());
 
     var walker = try root.walk(allocator);
     defer walker.deinit();
 
-    while (try walker.next()) |entry| {
+    while (try walker.next(compat.getIo())) |entry| {
         if (entry.kind == .directory) continue;
         const rel = try arena.dupe(u8, entry.path);
         if (containsGitDir(rel)) continue;
@@ -332,7 +333,7 @@ fn walkAdditive(
         const src_abs = try std.fs.path.join(arena, &.{ src_dir, rel });
         try copyInto(dst_dir, rel, src_abs);
 
-        try traces.append(.{
+        try traces.append(arena, .{
             .capability = try arena.dupe(u8, cap),
             .relative_path = rel,
             .layer = layer,
@@ -351,27 +352,19 @@ fn copyInto(dst_dir: []const u8, rel: []const u8, src_abs: []const u8) !void {
 
     const dst_abs = try std.fs.path.join(tmp_a, &.{ dst_dir, rel });
     if (std.fs.path.dirname(dst_abs)) |parent| {
-        std.fs.cwd().makePath(parent) catch |e| switch (e) {
-            error.PathAlreadyExists => {},
-            else => return e,
-        };
+        try compat.makePathAbsolute(parent);
     }
 
     // copyFile preserves source file mode by default.
-    try std.fs.cwd().copyFile(src_abs, std.fs.cwd(), dst_abs, .{});
+    try compat.copyFileAbsolute(src_abs, dst_abs);
 }
 
 fn isDir(abs: []const u8) bool {
-    var d = std.fs.cwd().openDir(abs, .{}) catch return false;
-    d.close();
-    return true;
+    return compat.isDir(abs);
 }
 
 fn isRegularFile(abs: []const u8) bool {
-    var f = std.fs.cwd().openFile(abs, .{}) catch return false;
-    defer f.close();
-    const st = f.stat() catch return false;
-    return st.kind == .file;
+    return compat.isFile(abs);
 }
 
 fn containsGitDir(rel_path: []const u8) bool {
@@ -389,7 +382,7 @@ fn strLessThan(_: void, a: []const u8, b: []const u8) bool {
 
 fn readPluginVersion(arena: std.mem.Allocator, library_dir: []const u8) !?[]const u8 {
     const plugin_json_path = try std.fs.path.join(arena, &.{ library_dir, "plugin.json" });
-    const contents = std.fs.cwd().readFileAlloc(arena, plugin_json_path, 1 << 20) catch return null;
+    const contents = compat.readFile(arena, plugin_json_path) catch return null;
 
     var parsed = std.json.parseFromSlice(std.json.Value, arena, contents, .{}) catch return null;
     defer parsed.deinit();
@@ -419,8 +412,8 @@ pub fn writeTrace(result: MaterializeResult, allocator: std.mem.Allocator) !void
 
     for (result.traces) |t| {
         const gop = try by_cap.getOrPut(t.capability);
-        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TraceFile).init(a);
-        try gop.value_ptr.append(.{
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(a, .{
             .path = t.relative_path,
             .layer = t.layer.toString(),
             .source = t.source_absolute,
@@ -432,14 +425,15 @@ pub fn writeTrace(result: MaterializeResult, allocator: std.mem.Allocator) !void
     for (result.cap_names, 0..) |n, i| cap_order[i] = n;
     std.mem.sort([]const u8, cap_order, {}, strLessThan);
 
-    var buf = std.ArrayList(u8).init(a);
-    const w = buf.writer();
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const w = &aw.writer;
 
     try w.writeAll("{\n  \"agent\": ");
-    try std.json.encodeJsonString(result.agent_name, .{}, w);
+    try std.json.Stringify.encodeJsonString(result.agent_name, .{}, w);
     try w.writeAll(",\n  \"generated_at\": ");
     const ts = try isoTimestamp(a);
-    try std.json.encodeJsonString(ts, .{}, w);
+    try std.json.Stringify.encodeJsonString(ts, .{}, w);
     try w.writeAll(",\n  \"capabilities\": [");
 
     var first_cap = true;
@@ -447,7 +441,7 @@ pub fn writeTrace(result: MaterializeResult, allocator: std.mem.Allocator) !void
         if (!first_cap) try w.writeAll(",");
         first_cap = false;
         try w.writeAll("\n    {\n      \"name\": ");
-        try std.json.encodeJsonString(cap_name, .{}, w);
+        try std.json.Stringify.encodeJsonString(cap_name, .{}, w);
         try w.writeAll(",\n      \"library_version\": ");
         // Find version from cap_versions via cap_names ordering.
         var version: ?[]const u8 = null;
@@ -458,7 +452,7 @@ pub fn writeTrace(result: MaterializeResult, allocator: std.mem.Allocator) !void
             }
         }
         if (version) |v| {
-            try std.json.encodeJsonString(v, .{}, w);
+            try std.json.Stringify.encodeJsonString(v, .{}, w);
         } else {
             try w.writeAll("null");
         }
@@ -472,11 +466,11 @@ pub fn writeTrace(result: MaterializeResult, allocator: std.mem.Allocator) !void
                 if (!first_f) try w.writeAll(",");
                 first_f = false;
                 try w.writeAll("\n        { \"path\": ");
-                try std.json.encodeJsonString(tf.path, .{}, w);
+                try std.json.Stringify.encodeJsonString(tf.path, .{}, w);
                 try w.writeAll(", \"layer\": ");
-                try std.json.encodeJsonString(tf.layer, .{}, w);
+                try std.json.Stringify.encodeJsonString(tf.layer, .{}, w);
                 try w.writeAll(", \"source\": ");
-                try std.json.encodeJsonString(tf.source, .{}, w);
+                try std.json.Stringify.encodeJsonString(tf.source, .{}, w);
                 try w.writeAll(" }");
             }
             if (list.items.len > 0) try w.writeAll("\n      ");
@@ -487,7 +481,7 @@ pub fn writeTrace(result: MaterializeResult, allocator: std.mem.Allocator) !void
     try w.writeAll("]\n}\n");
 
     const trace_path = try std.fs.path.join(a, &.{ result.runtime_dir, "trace.json" });
-    try std.fs.cwd().writeFile(.{ .sub_path = trace_path, .data = buf.items });
+    try compat.writeFileAtPath(trace_path, aw.writer.buffered());
 }
 
 fn traceFileLessThan(_: void, a: TraceFile, b: TraceFile) bool {
@@ -495,7 +489,7 @@ fn traceFileLessThan(_: void, a: TraceFile, b: TraceFile) bool {
 }
 
 fn isoTimestamp(allocator: std.mem.Allocator) ![]const u8 {
-    const ts: i64 = std.time.timestamp();
+    const ts: i64 = compat.nowUnixSeconds();
     // Break down into UTC components (simple epoch-based calc).
     const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
     const day_seconds = epoch_seconds.getDaySeconds();
