@@ -19,6 +19,11 @@ a **per-runtime passthrough** (`targets.<runtime>`, deep-merged) for everything
 else, and **no silent drops** — if a target can't represent a field you set, the
 tool tells you. See [`docs/agent-config-superset.md`](docs/agent-config-superset.md).
 
+## Documentation
+
+- **[Using `mc` as a package manager](docs/package-manager.md)** — marketplaces, plugins, the sandbox, lockfile, `generate`, and compatibility gating.
+- **[Agent configuration superset](docs/agent-config-superset.md)** — the one-`agent.json` model and the cross-runtime emitters.
+
 ---
 
 ## Requirements
@@ -49,7 +54,9 @@ mc validate                        # validate every config file + cross-referenc
 ```
 
 `mc agent emit` prints native config to **stdout** (clean, pipeable) and any
-"this field isn't representable on that runtime" **warnings to stderr**.
+"this field isn't representable on that runtime" **warnings to stderr**. The
+full package-manager workflow (marketplaces, plugins, lockfile, `generate`) is
+documented in **[docs/package-manager.md](docs/package-manager.md)**.
 
 ## The agent configuration superset
 
