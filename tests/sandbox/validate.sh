@@ -65,6 +65,14 @@ G="$(emit "$N" google)";   check "google: well-formed"   yaml "$G"
 P="$(emit "$N" pi)";       check "pi: well-formed"       json "$P"
 jq_has "$P" '.providers.anthropic.models[0].id=="claude-opus-4-7"' && ok "pi: providers.<p>.models[0].id" || bad "pi: shape"
 
+# targets.<runtime> passthrough must deep-merge into each runtime's output
+# (this is how "all configuration options" are reachable for every target).
+jq_has "$M" '.metadata.tier=="gold" and .metadata.team=="infra"' && ok "passthrough: targets.managed deep-merged into metadata" || bad "passthrough: managed"
+jq_has "$O" '.default==true' && ok "passthrough: targets.openclaw added a key" || bad "passthrough: openclaw"
+jq_has "$P" '.providers.extra.api=="openai-chat-completions"' && ok "passthrough: targets.pi added a provider" || bad "passthrough: pi"
+[ "$(yaml_get "$H" "['agent']['max_turns']")" = "90" ] && ok "passthrough: targets.hermes merged into agent block" || bad "passthrough: hermes"
+[ "$(yaml_get "$G" "['ate']['endpoint']")" = "https://ate.example" ] && ok "passthrough: targets.google added ate block" || bad "passthrough: google"
+
 echo "=== fixture: pi-local.json (pi pinned config; --out without key) ==="
 N="$(install_agent "$FIX/pi-local.json")"
 P="$(emit "$N" pi)"; check "pi-local: well-formed" json "$P"

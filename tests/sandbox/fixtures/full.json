@@ -13,5 +13,12 @@
   "tools": { "allow": ["Read", "Grep"], "deny": ["Bash"] },
   "mcp_servers": { "linear": { "url": "https://mcp.linear.app/sse" } },
   "multiagent": { "delegates": ["tester"] },
-  "metadata": { "team": "infra" }
+  "metadata": { "team": "infra" },
+  "targets": {
+    "managed":  { "metadata": { "tier": "gold" } },
+    "openclaw": { "default": true },
+    "hermes":   { "agent": { "max_turns": 90 } },
+    "google":   { "ate": { "endpoint": "https://ate.example" } },
+    "pi":       { "providers": { "extra": { "api": "openai-chat-completions" } } }
+  }
 }

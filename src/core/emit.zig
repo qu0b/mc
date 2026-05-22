@@ -447,6 +447,7 @@ pub fn emitPiModels(allocator: std.mem.Allocator, agent: Agent, api_key: ?[]cons
 
     var root = ObjectMap.init(allocator);
     try root.put("providers", .{ .object = providers });
+    try applyTarget(allocator, &root, agent, "pi");
     return std.json.Stringify.valueAlloc(allocator, Value{ .object = root }, .{ .whitespace = .indent_2 });
 }
 
