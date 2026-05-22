@@ -99,7 +99,7 @@ The full field-by-field mapping across all four runtimes is in
 Add `mc` as a dependency:
 
 ```sh
-zig fetch --save https://github.com/qu0b/mc/archive/refs/tags/v0.1.0.tar.gz
+zig fetch --save https://github.com/qu0b/mc/archive/refs/tags/v0.2.0.tar.gz
 ```
 
 That records it in your `build.zig.zon`:
@@ -107,8 +107,8 @@ That records it in your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .mc = .{
-        .url = "https://github.com/qu0b/mc/archive/refs/tags/v0.1.0.tar.gz",
-        .hash = "mc-0.1.0-5z6NH5sVCACi0zPZgw3J3W3zlAh1uOA13H0fg2zFycJn",
+        .url = "https://github.com/qu0b/mc/archive/refs/tags/v0.2.0.tar.gz",
+        .hash = "mc-0.2.0-5z6NHy5PCACXGMBmR_xTFrChIzHXxi0z6x5xWZrbOlCg",
     },
 },
 ```
