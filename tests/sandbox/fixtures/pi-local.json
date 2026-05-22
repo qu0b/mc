@@ -1,0 +1,17 @@
+{
+  "name": "local-coder",
+  "description": "Self-hosted coding agent",
+  "model": "minimax-m2.7",
+  "provider": "local-llm",
+  "thinking": "off",
+  "prompt": "./prompt.md",
+  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "edit" },
+  "env": { "required": ["LITELLM_KEY"], "optional": [] },
+  "runtime": "pi",
+  "base_url": "https://ai.starflinger.eu",
+  "api": "anthropic-messages",
+  "api_key_env": "LITELLM_KEY",
+  "context_window": 196608,
+  "max_tokens": 64000,
+  "reasoning": true
+}

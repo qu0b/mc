@@ -1,0 +1,17 @@
+{
+  "name": "reviewer",
+  "description": "Reviews pull requests carefully",
+  "model": "claude-opus-4-7",
+  "provider": "anthropic",
+  "thinking": "high",
+  "prompt": "./prompt.md",
+  "capabilities": { "skills": ["code-review"], "commands": [], "extensions": [], "toolset": "read-only" },
+  "env": { "required": [], "optional": [], "vars": { "LOG_LEVEL": "info" } },
+  "system": "You review code carefully.",
+  "speed": "fast",
+  "permissions": { "default": "ask" },
+  "tools": { "allow": ["Read", "Grep"], "deny": ["Bash"] },
+  "mcp_servers": { "linear": { "url": "https://mcp.linear.app/sse" } },
+  "multiagent": { "delegates": ["tester"] },
+  "metadata": { "team": "infra" }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "weather",
+  "description": "Answers weather questions",
+  "model": "gemini-3.5-flash",
+  "provider": "google",
+  "thinking": "off",
+  "prompt": "./prompt.md",
+  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "read-only" },
+  "env": { "required": ["GOOGLE_API_KEY"], "optional": [] },
+  "runtime": "google",
+  "system": "You are a helpful weather agent.",
+  "temperature": 0.2,
+  "max_tokens": 2048
+}

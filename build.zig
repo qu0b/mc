@@ -542,6 +542,14 @@ pub fn build(b: *std.Build) void {
     test_config_step.dependOn(&run_agent_schema_tests.step);
     test_config_step.dependOn(&run_emit_tests.step);
 
+    // Sandbox harness: build the exe, emit every runtime's config from
+    // representative fixtures, and confirm each is well-formed + correctly
+    // shaped + leaks no secrets (tests/sandbox/validate.sh).
+    const sandbox_run = b.addSystemCommand(&.{ "bash", "tests/sandbox/validate.sh" });
+    sandbox_run.step.dependOn(b.getInstallStep());
+    const sandbox_step = b.step("sandbox", "Emit + validate configs for every runtime");
+    sandbox_step.dependOn(&sandbox_run.step);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_emit_tests.step);
     test_step.dependOn(&run_unit_tests.step);

@@ -109,21 +109,23 @@ Existing required keys are unchanged (back-compatible). All superset keys are **
 
 ## Emitters (`src/core/emit.zig`)
 
-Pure functions `Agent (+ prompt text) -> native config bytes`. All four runtimes
-the goal named are implemented:
+Pure functions `Agent (+ prompt text) -> native config bytes`. **Six** runtimes
+are implemented:
 
-- **claude** — Managed Agents `agents.create` body (JSON). Maps `mcp_servers` →
-  URL connectors + `mcp_toolset` refs, and `permissions.default` →
-  `tools[].default_config.permission_policy`. ✅
+- **claude** — Anthropic **Claude Code**: a `.claude/agents/<name>.md` subagent
+  (frontmatter `name/description/model`-alias/`tools` + system-prompt body); with
+  `--out`, also `.claude/settings.json` and `.mcp.json`. ✅
+- **managed** — Anthropic **Managed Agents** `agents.create` body (JSON). Maps
+  `mcp_servers` → URL connectors + `mcp_toolset` refs, and `permissions.default`
+  → `tools[].default_config.permission_policy`. ✅
 - **openclaw** — `openclaw.json` `agents.list[]` entry (JSON). ✅
-- **hermes** — `config.yaml` fragment (YAML, via a small JSON-value→YAML writer);
-  maps model/`reasoning_effort`/`mcp_servers`/`terminal`/`memory`. ✅
+- **hermes** — `config.yaml` (YAML); maps model/`reasoning_effort`/`mcp_servers`/
+  `terminal`/`memory`. ✅
 - **pi** — a `~/.pi/agent` config that **pins the exact provider + model id**:
-  `models.json` (`emitPiModels` — `providers.<name>.{baseUrl,api,models:[{id,…}]}`)
-  and `settings.json` (`emitPiSettings` — `defaultProvider/defaultModel/
-  defaultThinkingLevel`). This avoids pi's fuzzy `--model` resolution picking the
-  wrong variant or colliding with a built-in provider name. `emitPiArgv` still
-  builds the locked-down argv loadout. ✅
+  `models.json` (`emitPiModels`) and `settings.json` (`emitPiSettings`), avoiding
+  pi's fuzzy `--model` resolution. `emitPiArgv` still builds the argv loadout. ✅
+- **google** — Google **AX** (`Agent eXecutor`) `ax.yaml`: a gemini `planner`
+  (model/`system_prompt`/sampling) + a `registry.remote_agents[]` entry. ✅
 
 Every JSON emitter builds a `std.json.Value` tree and **deep-merges** the matching
 `targets.<runtime>` object over it (RFC 7386), so even nested runtime-specific
@@ -160,3 +162,14 @@ Validate the config layer in isolation (no filesystem) with:
 ```
 zig build test-config
 ```
+
+## Sandbox validation
+
+`zig build sandbox` (→ `tests/sandbox/validate.sh`) is an end-to-end harness: it
+emits every runtime's config from representative `tests/sandbox/fixtures/*.json`
+and confirms each output is **well-formed** (real JSON/YAML parse), matches that
+runtime's **expected shape** (key/value assertions), and **leaks no secret**.
+It also exercises `--out` materialization (e.g. pi's `.pi/agent/` with the key
+omitted when `api_key_env` is unset). Add a fixture to cover a new scenario;
+plug a real-runtime validator (openclaw zod, AX Go loader, …) into the per-target
+checks to confirm against the actual schema.

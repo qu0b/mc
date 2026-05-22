@@ -37,6 +37,7 @@ zig build              # build the `mc` CLI → zig-out/bin/mc
 zig build run -- ...   # build & run the CLI
 zig build test         # run the test suite
 zig build test-config  # run just the agent-config + emitter tests (no filesystem)
+zig build sandbox      # emit + validate configs for every runtime (well-formed, shaped, no secrets)
 zig build example      # run the library-consumer example
 ```
 
@@ -46,9 +47,12 @@ zig build example      # run the library-consumer example
 mc init --name my-project          # create a .mc/ sandbox
 mc add <plugin> -m <marketplace>   # install a capability plugin
 mc agent new reviewer              # scaffold agents/reviewer/{agent.json,prompt.md}
-mc agent emit reviewer --target claude     # → Claude Managed Agents create body
+mc agent emit reviewer --target claude     # → Claude Code subagent (.claude/agents/*.md)
+mc agent emit reviewer --target managed    # → Anthropic Managed Agents create body
 mc agent emit reviewer --target openclaw   # → OpenClaw agents.list[] entry
 mc agent emit reviewer --target hermes     # → Hermes config.yaml
+mc agent emit reviewer --target google     # → Google AX ax.yaml
+mc agent emit reviewer --target pi --out d # → materialize d/.pi/agent/{models,settings}.json
 mc run reviewer --dry-run          # preview the pi command for this agent
 mc validate                        # validate every config file + cross-references
 ```
