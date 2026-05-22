@@ -91,24 +91,46 @@ test "unknown top-level field is reported" {
     try std.testing.expect(messagesContain(&d, "unknown key 'bogus'"));
 }
 
-test "bogus provider triggers enum error" {
+test "provider: invalid-format errors; unknown-but-valid name only warns" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var d = diag.Diagnostics.init(std.testing.allocator);
-    defer d.deinit();
 
-    const src =
-        \\{
-        \\  "name": "x", "description": "x", "model": "x",
-        \\  "provider": "bogus", "thinking": "off", "prompt": "x",
-        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
-        \\  "env": { "required": [], "optional": [] }
-        \\}
-    ;
-    _ = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
-    try std.testing.expect(messagesContain(&d, "must be one of:"));
-    try std.testing.expect(messagesContain(&d, "openrouter"));
-    try std.testing.expectEqual(@as(usize, 1), pathCount(&d, "provider"));
+    // Bad format (uppercase/space) → hard error, agent rejected.
+    {
+        var d = diag.Diagnostics.init(std.testing.allocator);
+        defer d.deinit();
+        const src =
+            \\{
+            \\  "name": "x", "description": "x", "model": "x",
+            \\  "provider": "Bad Provider", "thinking": "off", "prompt": "x",
+            \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+            \\  "env": { "required": [], "optional": [] }
+            \\}
+        ;
+        const a = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
+        try std.testing.expect(a == null);
+        try std.testing.expect(d.hasErrors());
+        try std.testing.expectEqual(@as(usize, 1), pathCount(&d, "provider"));
+    }
+
+    // Deployment-defined name (e.g. "local-llm") → valid; warns, but parses.
+    {
+        var d = diag.Diagnostics.init(std.testing.allocator);
+        defer d.deinit();
+        const src =
+            \\{
+            \\  "name": "x", "description": "x", "model": "minimax-m2.7",
+            \\  "provider": "local-llm", "thinking": "off", "prompt": "x",
+            \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+            \\  "env": { "required": [], "optional": [] }
+            \\}
+        ;
+        const a = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
+        try std.testing.expect(a != null);
+        try std.testing.expect(!d.hasErrors());
+        try std.testing.expectEqualStrings("local-llm", a.?.provider);
+        try std.testing.expect(messagesContain(&d, "not a built-in"));
+    }
 }
 
 test "env var identifier rules: ok_var, BadVar, 123ABC all rejected" {
@@ -167,7 +189,7 @@ test "multiple errors across fields all captured" {
         \\  "name": "Bad-Case",
         \\  "description": "",
         \\  "model": "m",
-        \\  "provider": "not-a-provider",
+        \\  "provider": "Bad Provider",
         \\  "thinking": "turbo",
         \\  "prompt": "",
         \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },

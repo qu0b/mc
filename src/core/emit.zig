@@ -274,6 +274,44 @@ pub fn emitPiArgv(
     return list.toOwnedSlice(allocator);
 }
 
+/// Build a pi `~/.pi/agent/models.json` fragment that defines `agent.provider`
+/// with the **exact** `agent.model` id, so pi doesn't fuzzy-match the wrong
+/// variant or collide with a built-in provider name. The API key is NOT
+/// embedded — supply it from `api_key_env` at run time (or via pi's auth).
+pub fn emitPiModels(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
+    var model = ObjectMap.init(allocator);
+    try model.put("id", .{ .string = agent.model });
+    try model.put("name", .{ .string = agent.model });
+    if (agent.reasoning) |r| try model.put("reasoning", .{ .bool = r });
+    {
+        var input = Array.init(allocator);
+        try input.append(.{ .string = "text" });
+        try model.put("input", .{ .array = input });
+    }
+    if (agent.context_window) |c| try model.put("contextWindow", .{ .integer = c });
+    if (agent.max_tokens) |mt| try model.put("maxTokens", .{ .integer = mt });
+    {
+        var cost = ObjectMap.init(allocator);
+        for ([_][]const u8{ "input", "output", "cacheRead", "cacheWrite" }) |k| try cost.put(k, .{ .integer = 0 });
+        try model.put("cost", .{ .object = cost });
+    }
+
+    var models = Array.init(allocator);
+    try models.append(.{ .object = model });
+
+    var prov = ObjectMap.init(allocator);
+    if (agent.base_url) |b| try prov.put("baseUrl", .{ .string = b });
+    if (agent.api) |a| try prov.put("api", .{ .string = a });
+    try prov.put("models", .{ .array = models });
+
+    var providers = ObjectMap.init(allocator);
+    try providers.put(agent.provider, .{ .object = prov });
+
+    var root = ObjectMap.init(allocator);
+    try root.put("providers", .{ .object = providers });
+    return std.json.Stringify.valueAlloc(allocator, Value{ .object = root }, .{ .whitespace = .indent_2 });
+}
+
 // ---------------------------------------------------------------------------
 // Drop diagnostics — superset fields set but not translated for a target.
 // ---------------------------------------------------------------------------
@@ -306,10 +344,12 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
             if (agent.metadata != null) try add(&w, allocator, "metadata has no OpenClaw agent-entry field; not emitted");
         },
         .pi => {
-            if (has_mcp) try add(&w, allocator, "pi has no native MCP config in this emitter");
-            if (agent.multiagent != null) try add(&w, allocator, "pi has no sub-agent delegation; multiagent ignored");
-            if (agent.sandbox != null) try add(&w, allocator, "pi runs locally; sandbox ignored");
-            if (agent.permissions != null) try add(&w, allocator, "pi has no permission-policy config; permissions ignored");
+            if (agent.api == null) try add(&w, allocator, "no `api` set — pi needs the wire protocol; add e.g. \"api\": \"anthropic-messages\"");
+            if (agent.api_key_env) |e|
+                try w.append(allocator, try std.fmt.allocPrint(allocator, "API key not embedded; inject ${s} at run time (or via pi auth)", .{e}));
+            if (has_mcp) try add(&w, allocator, "MCP servers aren't part of pi's models.json");
+            if (agent.multiagent != null) try add(&w, allocator, "pi has no sub-agent delegation; multiagent is not part of the model config");
+            if (agent.permissions != null) try add(&w, allocator, "permissions are not part of a pi model config");
         },
         .hermes => {
             if (agent.system != null) try add(&w, allocator, "inline system prompt isn't emitted to config.yaml; Hermes reads it from soul.md");

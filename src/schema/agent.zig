@@ -82,6 +82,11 @@ pub const Agent = struct {
     /// Name of the env var holding the provider API key.
     api_key_env: ?[]const u8 = null,
     base_url: ?[]const u8 = null,
+    /// Wire protocol the provider speaks (pi `api`): e.g. "anthropic-messages",
+    /// "openai-chat-completions". Lets emitters pin a full provider definition.
+    api: ?[]const u8 = null,
+    /// Whether the model supports reasoning/thinking output.
+    reasoning: ?bool = null,
     /// Allowlist of MCP server names to attach. Empty → attach all of
     /// `mcp_servers`. Names without a definition are assumed defined elsewhere
     /// (installed plugins / per-target passthrough).
@@ -162,6 +167,31 @@ fn validateEnvIdent(value: std.json.Value, diags: *diag.Diagnostics, file: []con
             .{value.string},
         );
     }
+}
+
+/// Provider names are deployment-defined registries (a pi/hermes/openclaw
+/// provider can be any name the runtime configures, e.g. "local-llm"). We
+/// therefore accept any lowercase slug and only *warn* when the name isn't one
+/// of the built-ins below — a closed enum here wrongly rejects valid configs.
+fn validateProvider(value: std.json.Value, diags: *diag.Diagnostics, file: []const u8, path: []const u8) anyerror!void {
+    if (value != .string) return;
+    const s = value.string;
+    if (!isSlug(s)) {
+        try diags.err(
+            file,
+            try diags.arena.allocator().dupe(u8, path),
+            "provider must be a lowercase slug ^[a-z][a-z0-9-]{{0,62}}$, got '{s}'",
+            .{s},
+        );
+        return;
+    }
+    for (PROVIDER_VALUES) |known| if (std.mem.eql(u8, known, s)) return;
+    try diags.warn(
+        file,
+        try diags.arena.allocator().dupe(u8, path),
+        "provider '{s}' is not a built-in; ensure the runtime defines it (e.g. via `mc agent emit --target pi`)",
+        .{s},
+    );
 }
 
 fn validateSlug(value: std.json.Value, diags: *diag.Diagnostics, file: []const u8, path: []const u8) anyerror!void {
@@ -306,7 +336,7 @@ pub const AGENT_SCHEMA: []const json_strict.FieldSpec = &[_]json_strict.FieldSpe
     .{ .name = "name", .type = .string, .required = true, .validate = validateSlug },
     .{ .name = "description", .type = .string, .required = true, .validate = validateNonEmptyString },
     .{ .name = "model", .type = .string, .required = true, .validate = validateNonEmptyString },
-    .{ .name = "provider", .type = .string, .required = true, .enum_values = &PROVIDER_VALUES },
+    .{ .name = "provider", .type = .string, .required = true, .validate = validateProvider },
     .{ .name = "thinking", .type = .string, .required = true, .enum_values = &THINKING_VALUES },
     .{ .name = "prompt", .type = .string, .required = true, .validate = validateNonEmptyString },
     .{ .name = "capabilities", .type = .object, .required = true, .nested = &CAPABILITIES_SCHEMA },
@@ -322,6 +352,8 @@ pub const AGENT_SCHEMA: []const json_strict.FieldSpec = &[_]json_strict.FieldSpe
     .{ .name = "context_window", .type = .integer },
     .{ .name = "api_key_env", .type = .string, .validate = validateEnvIdent },
     .{ .name = "base_url", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "api", .type = .string, .validate = validateNonEmptyString },
+    .{ .name = "reasoning", .type = .boolean },
     .{ .name = "mcp", .type = .array, .element_type = .string, .validate = validateSlugArray },
     .{ .name = "mcp_servers", .type = .object, .map_value_nested = &MCP_SERVER_SCHEMA },
     .{ .name = "tools", .type = .object, .nested = &TOOLS_SCHEMA },
@@ -476,6 +508,8 @@ pub fn parseAgent(
         .context_window = getInt(root, "context_window"),
         .api_key_env = getString(root, "api_key_env"),
         .base_url = getString(root, "base_url"),
+        .api = getString(root, "api"),
+        .reasoning = getBool(root, "reasoning"),
         .mcp = try getStringArray(allocator, root, "mcp"),
         .mcp_servers = root.get("mcp_servers"),
         .tools = tools,

@@ -239,7 +239,11 @@ fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void
             w.writeAll(out);
         },
         .pi => {
-            w.print("# pi runtime: run 'mc run {s} --dry-run' to preview the full command.\n", .{opts.name});
+            // The "proper model config": a pi models.json that pins the exact
+            // provider + model (no fuzzy --model matching). `mc run` uses this.
+            const out = try emit.emitPiModels(allocator, ag);
+            w.writeAll(out);
+            w.writeAll("\n");
         },
     }
 
