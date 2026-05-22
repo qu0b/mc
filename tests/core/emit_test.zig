@@ -294,14 +294,62 @@ test "emitManaged: mcp_servers definitions become url connectors + toolset refs;
     try std.testing.expect(servers.items[0].object.get("command") == null);
 
     // tools: agent_toolset (with permission policy) + a toolset ref per attached server.
+    // superset "ask" maps to the Managed Agents enum token "always_ask" (the
+    // documented permission_policy.type values are always_allow|always_ask) —
+    // never the raw superset token.
     const tools = o.get("tools").?.array;
     const dc = tools.items[0].object.get("default_config").?.object;
-    try std.testing.expectEqualStrings("ask", dc.get("permission_policy").?.object.get("type").?.string);
+    try std.testing.expectEqualStrings("always_ask", dc.get("permission_policy").?.object.get("type").?.string);
     // attach-all (no `mcp` allowlist) attaches only emittable url servers, so
     // the stdio "fs" gets no dangling toolset ref: agent_toolset + linear only.
     try std.testing.expectEqual(@as(usize, 2), tools.items.len);
     try std.testing.expectEqualStrings("mcp_toolset", tools.items[1].object.get("type").?.string);
     try std.testing.expectEqualStrings("linear", tools.items[1].object.get("mcp_server_name").?.string);
+}
+
+test "emitManaged: permissions.default maps to a valid Managed Agents permission_policy enum" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // The Managed Agents agent_toolset permission_policy.type enum is
+    // always_allow|always_ask (no "deny"); the abstract superset token must be
+    // translated, never written raw.
+    const Case = struct { policy: []const u8, expect: ?[]const u8, warn: bool };
+    const cases = [_]Case{
+        .{ .policy = "always_allow", .expect = "always_allow", .warn = false },
+        .{ .policy = "ask", .expect = "always_ask", .warn = false },
+        // "deny" has no permission_policy.type — must be omitted AND warned,
+        // not emitted as a bogus type the API would reject.
+        .{ .policy = "deny", .expect = null, .warn = true },
+    };
+
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(arena.allocator(),
+            \\{{
+            \\  "name": "a", "description": "d", "model": "claude-opus-4-7",
+            \\  "provider": "anthropic", "thinking": "high", "prompt": "p",
+            \\  "capabilities": {{ "skills": [], "commands": [], "extensions": [], "toolset": "x" }},
+            \\  "env": {{ "required": [], "optional": [] }},
+            \\  "permissions": {{ "default": "{s}" }}
+            \\}}
+        , .{c.policy});
+        const a = try parse(arena.allocator(), src);
+
+        const json = try emit.emitManaged(arena.allocator(), a, "P");
+        const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
+        const toolset = v.object.get("tools").?.array.items[0].object;
+
+        if (c.expect) |want| {
+            const got = toolset.get("default_config").?.object.get("permission_policy").?.object.get("type").?.string;
+            try std.testing.expectEqualStrings(want, got);
+        } else {
+            // no default_config emitted for an untranslatable policy
+            try std.testing.expect(toolset.get("default_config") == null);
+        }
+
+        const warns = try emit.warnings(arena.allocator(), a, .managed);
+        try std.testing.expectEqual(c.warn, warnsContain(warns, "no Managed Agents permission_policy.type"));
+    }
 }
 
 test "warnings: claude flags dropped fields but not honored permissions" {

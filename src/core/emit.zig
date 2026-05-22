@@ -98,11 +98,19 @@ pub fn emitManaged(allocator: std.mem.Allocator, agent: Agent, prompt_text: []co
         var t0 = ObjectMap.init(allocator);
         try t0.put("type", .{ .string = "agent_toolset_20260401" });
         if (agent.permissions) |p| if (p.default) |def| {
-            var pol = ObjectMap.init(allocator);
-            try pol.put("type", .{ .string = def });
-            var dc = ObjectMap.init(allocator);
-            try dc.put("permission_policy", .{ .object = pol });
-            try t0.put("default_config", .{ .object = dc });
+            // The abstract superset policy (always_allow|ask|deny) is NOT the
+            // Managed Agents toolset enum, which is only always_allow|always_ask
+            // (a tool is forbidden by disabling it, not by a policy type). Map
+            // to a *valid* permission_policy.type; "deny" has no equivalent so
+            // we omit the policy and warnings() flags it. Never write the raw
+            // superset token, which the API would reject.
+            if (managedPermissionPolicy(def)) |pt| {
+                var pol = ObjectMap.init(allocator);
+                try pol.put("type", .{ .string = pt });
+                var dc = ObjectMap.init(allocator);
+                try dc.put("permission_policy", .{ .object = pol });
+                try t0.put("default_config", .{ .object = dc });
+            }
         };
         try tools.append(.{ .object = t0 });
 
@@ -128,6 +136,21 @@ pub fn emitManaged(allocator: std.mem.Allocator, agent: Agent, prompt_text: []co
 
     try applyTarget(allocator, &obj, agent, "managed");
     return std.json.Stringify.valueAlloc(allocator, Value{ .object = obj }, .{ .whitespace = .indent_2 });
+}
+
+/// Map the abstract cross-runtime permission policy (always_allow|ask|deny) to
+/// a valid Managed Agents toolset `permission_policy.type`. The Managed Agents
+/// enum is `always_allow | always_ask` (documented basis: the `agent_toolset`
+/// permission-policy field on the `agents.create` body — `always_allow` runs a
+/// tool automatically, `always_ask` pauses for a `tool_confirmation` event).
+/// There is no "deny" policy type — a tool is forbidden by disabling it
+/// (`enabled: false`), not via a policy — so `deny` maps to null (the caller
+/// omits default_config and warnings() flags it).
+fn managedPermissionPolicy(policy: []const u8) ?[]const u8 {
+    const eq = std.mem.eql;
+    if (eq(u8, policy, "always_allow")) return "always_allow";
+    if (eq(u8, policy, "ask")) return "always_ask";
+    return null; // "deny": no equivalent permission_policy.type
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +546,11 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
             if (agent.tools != null) try add(&w, allocator, "tools.allow/deny are not translated; use the typed tools[] via targets.managed.tools");
             if (agent.sandbox != null) try add(&w, allocator, "sandbox belongs to the session environment, not the agent resource");
             if (agent.memory != null) try add(&w, allocator, "memory is configured via session memory stores, not the agent resource");
-            if (agent.permissions) |p| if (p.rules != null) try add(&w, allocator, "permissions.rules (per-tool) aren't translated; only permissions.default maps to the toolset permission_policy");
+            if (agent.permissions) |p| {
+                if (p.rules != null) try add(&w, allocator, "permissions.rules (per-tool) aren't translated; only permissions.default maps to the toolset permission_policy");
+                if (p.default) |d| if (managedPermissionPolicy(d) == null)
+                    try add(&w, allocator, "permissions.default \"deny\" has no Managed Agents permission_policy.type (enum: always_allow|always_ask); forbid a tool by disabling it via targets.managed.tools[].configs");
+            }
             if (mcpHasStdio(agent)) try add(&w, allocator, "mcp_servers entries with 'command' (stdio) were omitted: Claude MCP connectors require a 'url'");
         },
         .claude_code => {

@@ -63,6 +63,12 @@ CS="$(cat "$OUTC/.claude/settings.json" 2>/dev/null)"
 jq_has "$CS" '.permissions.defaultMode=="default"' && ! grep -q '"ask"' <<<"$CS" \
   && ok "claude --out: permissions.default ask -> defaultMode \"default\" (valid enum)" \
   || bad "claude --out: defaultMode mapping"
+# Likewise for Managed Agents: "ask" must become the toolset permission_policy
+# enum "always_ask" (always_allow|always_ask), never the raw superset "ask".
+jq_has "$M" '.tools[0].default_config.permission_policy.type=="always_ask"' \
+  && ! jq_has "$M" '[.tools[].default_config.permission_policy.type] | index("ask")' \
+  && ok "managed: permissions.default ask -> permission_policy \"always_ask\" (valid enum)" \
+  || bad "managed: permission_policy mapping"
 O="$(emit "$N" openclaw)"; check "openclaw: well-formed" json "$O"
 jq_has "$O" '.id=="reviewer" and .thinkingDefault=="high"' && ok "openclaw: id+thinkingDefault" || bad "openclaw: shape"
 H="$(emit "$N" hermes)";   check "hermes: well-formed"   yaml "$H"
