@@ -208,6 +208,21 @@ fn claudeCodeDefaultMode(policy: []const u8) ?[]const u8 {
     return null; // "deny": no equivalent default mode
 }
 
+/// Map the abstract cross-runtime permission policy (always_allow|ask|deny) to
+/// Hermes' top-level `approvals.mode` for dangerous-command approval. Hermes'
+/// documented enum is `manual | smart | off` (config.py:1417-1426 —
+/// `manual`=always prompt the user, `smart`=auxiliary LLM auto-approves
+/// low-risk / prompts high-risk, `off`=skip all approval prompts (yolo)).
+/// `ask`→`manual`, `always_allow`→`off`. There is no "deny all" approval mode
+/// (the only `deny` value is `approvals.cron_mode`, which is cron-specific, not
+/// the general `mode`), so `deny` maps to null and warnings() flags it.
+fn hermesApprovalMode(policy: []const u8) ?[]const u8 {
+    const eq = std.mem.eql;
+    if (eq(u8, policy, "ask")) return "manual";
+    if (eq(u8, policy, "always_allow")) return "off";
+    return null; // "deny": no equivalent approvals.mode
+}
+
 /// Claude Code `.claude/settings.json`: model + permissions + env. Used by the
 /// `--out` materialize path.
 pub fn emitClaudeSettings(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
@@ -401,6 +416,17 @@ pub fn emitHermes(allocator: std.mem.Allocator, agent: Agent, prompt_text: []con
         try obj.put("memory", .{ .object = mo });
     };
 
+    // permissions.default → Hermes' top-level approvals.mode (manual|smart|off).
+    // The abstract superset policy isn't Hermes' enum; map to a *valid* mode.
+    // "deny" has no equivalent and is omitted (warnings() flags it).
+    if (agent.permissions) |p| if (p.default) |def| {
+        if (hermesApprovalMode(def)) |mode| {
+            var ap = ObjectMap.init(allocator);
+            try ap.put("mode", .{ .string = mode });
+            try obj.put("approvals", .{ .object = ap });
+        }
+    };
+
     try applyTarget(allocator, &obj, agent, "hermes");
 
     var buf: std.ArrayList(u8) = .empty;
@@ -591,7 +617,11 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
             if (agent.system != null) try add(&w, allocator, "inline system prompt isn't emitted to config.yaml; Hermes reads it from soul.md");
             if (agent.capabilities.skills.len > 0) try add(&w, allocator, "skill names don't map to Hermes skills.external_dirs (which are directories)");
             if (agent.tools != null) try add(&w, allocator, "tools.allow/deny aren't translated; Hermes uses platform_toolsets / named toolsets");
-            if (agent.permissions != null) try add(&w, allocator, "permissions aren't auto-translated to Hermes (it uses an approvals config)");
+            if (agent.permissions) |p| {
+                if (p.rules != null) try add(&w, allocator, "permissions.rules (per-tool) aren't translated; only permissions.default maps to approvals.mode");
+                if (p.default) |d| if (hermesApprovalMode(d) == null)
+                    try add(&w, allocator, "permissions.default \"deny\" has no Hermes approvals.mode (enum: manual|smart|off); the only deny is the cron-specific approvals.cron_mode");
+            }
             if (agent.multiagent != null) try add(&w, allocator, "multiagent roster isn't translated; Hermes delegation is configured separately");
             if (agent.metadata != null) try add(&w, allocator, "metadata has no Hermes config field; not emitted");
             if (agent.sandbox) |sb| if (sb.backend) |b| {

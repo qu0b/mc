@@ -473,6 +473,48 @@ test "emitHermes: max_turns is omitted when unset; warns on non-hermes targets" 
     try std.testing.expect(warnsContain(try emit.warnings(arena.allocator(), b, .pi), "max_turns"));
 }
 
+test "emitHermes: permissions.default maps to a valid approvals.mode enum" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // Hermes' approvals.mode enum is manual|smart|off (config.py:1417-1426); the
+    // abstract superset token must be translated to a *valid* mode, never raw.
+    const Case = struct { policy: []const u8, expect: ?[]const u8, warn: bool };
+    const cases = [_]Case{
+        .{ .policy = "ask", .expect = "manual", .warn = false },
+        .{ .policy = "always_allow", .expect = "off", .warn = false },
+        // "deny" has no approvals.mode (the only deny is the cron-specific
+        // approvals.cron_mode) — must be omitted AND warned, not written raw.
+        .{ .policy = "deny", .expect = null, .warn = true },
+    };
+
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(arena.allocator(),
+            \\{{
+            \\  "name": "h", "description": "d", "model": "claude-opus-4-7",
+            \\  "provider": "anthropic", "thinking": "high", "prompt": "p",
+            \\  "capabilities": {{ "skills": [], "commands": [], "extensions": [], "toolset": "x" }},
+            \\  "env": {{ "required": [], "optional": [] }},
+            \\  "permissions": {{ "default": "{s}" }}
+            \\}}
+        , .{c.policy});
+        const a = try parse(arena.allocator(), src);
+
+        const yaml = try emit.emitHermes(arena.allocator(), a, "unused");
+        if (c.expect) |want| {
+            const expected = try std.fmt.allocPrint(arena.allocator(), "approvals:\n  mode: \"{s}\"", .{want});
+            try std.testing.expect(contains(yaml, expected));
+            // Never leak the raw superset token into config.yaml.
+            try std.testing.expect(!contains(yaml, c.policy));
+        } else {
+            try std.testing.expect(!contains(yaml, "approvals:"));
+        }
+
+        const warns = try emit.warnings(arena.allocator(), a, .hermes);
+        try std.testing.expectEqual(c.warn, warnsContain(warns, "no Hermes approvals.mode"));
+    }
+}
+
 // A golden test locks the exact Claude wire shape for a minimal agent, so an
 // accidental change to field order/structure is caught loudly.
 test "emitManaged: golden minimal body" {

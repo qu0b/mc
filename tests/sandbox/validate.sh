@@ -70,6 +70,12 @@ jq_has "$M" '.tools[0].default_config.permission_policy.type=="always_ask"' \
   && ok "managed: permissions.default ask -> permission_policy \"always_ask\" (valid enum)" \
   || bad "managed: permission_policy mapping"
 O="$(emit "$N" openclaw)"; check "openclaw: well-formed" json "$O"
+# Likewise for Hermes: "ask" must become the approvals.mode enum "manual"
+# (manual|smart|off), never the raw superset "ask".
+H="$(emit "$N" hermes)"
+[ "$(yaml_get "$H" "['approvals']['mode']")" = "manual" ] && ! grep -q '"ask"' <<<"$H" \
+  && ok "hermes: permissions.default ask -> approvals.mode \"manual\" (valid enum)" \
+  || bad "hermes: approvals.mode mapping"
 jq_has "$O" '.id=="reviewer" and .thinkingDefault=="high"' && ok "openclaw: id+thinkingDefault" || bad "openclaw: shape"
 H="$(emit "$N" hermes)";   check "hermes: well-formed"   yaml "$H"
 [ "$(yaml_get "$H" "['model']['default']")" = "claude-opus-4-7" ] && ok "hermes: model.default" || bad "hermes: model.default"
