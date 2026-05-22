@@ -170,6 +170,12 @@ emits every runtime's config from representative `tests/sandbox/fixtures/*.json`
 and confirms each output is **well-formed** (real JSON/YAML parse), matches that
 runtime's **expected shape** (key/value assertions), and **leaks no secret**.
 It also exercises `--out` materialization (e.g. pi's `.pi/agent/` with the key
-omitted when `api_key_env` is unset). Add a fixture to cover a new scenario;
-plug a real-runtime validator (openclaw zod, AX Go loader, …) into the per-target
-checks to confirm against the actual schema.
+omitted when `api_key_env` is unset) and verifies `targets.<runtime>` passthrough
+reaches every runtime.
+
+**Real-runtime confirmation:** set `AX_REPO=<google/ax checkout>` (with `go`
+installed) and the harness validates the emitted `ax.yaml` against AX's *own*
+`config.LoadFromFile` + `Validate` — confirming mc emits a config AX genuinely
+accepts (this is why the AX emit includes the `server`/`eventlog` blocks AX
+requires). Add a fixture to cover a new scenario; the same opt-in pattern can
+plug openclaw's zod / pi's loader for those runtimes.

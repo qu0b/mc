@@ -537,11 +537,14 @@ test "emitGoogleAx: gemini planner + registry entry" {
     ;
     const a = try parse(arena.allocator(), src);
     const yaml = try emit.emitGoogleAx(arena.allocator(), a, "fb");
+    // Complete, valid AX config: server + eventlog (required by AX's Validate)
+    // + the gemini planner. (Verified end-to-end by tests/sandbox/validate.sh
+    // against AX's real config.LoadFromFile+Validate when AX_REPO is set.)
+    try std.testing.expect(contains(yaml, "server:\n  address: \":8494\""));
+    try std.testing.expect(contains(yaml, "eventlog:\n  sqlite:\n    filename: \"eventlog/log.sqlite\""));
     try std.testing.expect(contains(yaml, "planner:\n  type: \"gemini\"\n  gemini:\n    model: \"gemini-3.5-flash\""));
     try std.testing.expect(contains(yaml, "system_prompt: \"You answer weather questions.\""));
     try std.testing.expect(contains(yaml, "max_tokens: 2048"));
-    try std.testing.expect(contains(yaml, "remote_agents: ["));
-    try std.testing.expect(contains(yaml, "id: \"weather\""));
 
     // gemini provider → no provider warning; a non-gemini provider warns.
     try std.testing.expectEqual(@as(usize, 0), (try emit.warnings(arena.allocator(), a, .google)).len);

@@ -222,9 +222,11 @@ pub fn emitMcpJson(allocator: std.mem.Allocator, agent: Agent) !?[]u8 {
 // Google AX (Agent eXecutor) — an `ax.yaml` fragment.
 // ---------------------------------------------------------------------------
 
-/// Build an AX `ax.yaml` fragment: the gemini planner (model + system prompt +
-/// sampling) plus a `registry.remote_agents[]` entry for this agent. AX agent
-/// *logic* (tools) is Python (google.adk) and is out of scope for config.
+/// Build a **complete, valid** AX `ax.yaml`: server + eventlog (required by
+/// AX's own config.Validate) plus the gemini planner (model + system prompt +
+/// sampling) that runs this agent. AX agent *logic* (tools) is Python
+/// (google.adk) and registry.remote_agents (needs a live address) are out of
+/// scope for static config — add them via `targets.google`.
 pub fn emitGoogleAx(allocator: std.mem.Allocator, agent: Agent, prompt_text: []const u8) ![]u8 {
     var gemini = ObjectMap.init(allocator);
     try gemini.put("model", .{ .string = agent.model });
@@ -237,19 +239,18 @@ pub fn emitGoogleAx(allocator: std.mem.Allocator, agent: Agent, prompt_text: []c
     try planner.put("type", .{ .string = "gemini" });
     try planner.put("gemini", .{ .object = gemini });
 
-    var entry = ObjectMap.init(allocator);
-    try entry.put("id", .{ .string = agent.name });
-    try entry.put("name", .{ .string = agent.name });
-    if (agent.description.len > 0) try entry.put("description", .{ .string = agent.description });
-    try entry.put("protocol", .{ .string = "axp" });
-    var remote = Array.init(allocator);
-    try remote.append(.{ .object = entry });
-    var registry = ObjectMap.init(allocator);
-    try registry.put("remote_agents", .{ .array = remote });
+    // Required by AX's config.Validate() — emit working defaults.
+    var server = ObjectMap.init(allocator);
+    try server.put("address", .{ .string = ":8494" });
+    var sqlite = ObjectMap.init(allocator);
+    try sqlite.put("filename", .{ .string = "eventlog/log.sqlite" });
+    var eventlog = ObjectMap.init(allocator);
+    try eventlog.put("sqlite", .{ .object = sqlite });
 
     var root = ObjectMap.init(allocator);
+    try root.put("server", .{ .object = server });
+    try root.put("eventlog", .{ .object = eventlog });
     try root.put("planner", .{ .object = planner });
-    try root.put("registry", .{ .object = registry });
 
     try applyTarget(allocator, &root, agent, "google");
 

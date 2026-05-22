@@ -87,7 +87,27 @@ echo "=== fixture: ax-gemini.json (google AX) ==="
 N="$(install_agent "$FIX/ax-gemini.json")"
 G="$(emit "$N" google)"; check "ax: well-formed" yaml "$G"
 [ "$(yaml_get "$G" "['planner']['gemini']['model']")" = "gemini-3.5-flash" ] && ok "ax: gemini model" || bad "ax: model"
-[ "$(yaml_get "$G" "['registry']['remote_agents'][0]['id']")" = "weather" ] && ok "ax: registry entry id" || bad "ax: registry"
+[ "$(yaml_get "$G" "['server']['address']")" = ":8494" ] && ok "ax: server.address (required by AX Validate)" || bad "ax: server.address"
+
+# Real-runtime confirmation: validate against AX's own loader if a google/ax
+# checkout is provided (AX_REPO=/path/to/ax) and `go` is installed.
+if [ -n "${AX_REPO:-}" ] && [ -d "$AX_REPO" ] && command -v go >/dev/null 2>&1; then
+  printf '%s' "$G" > "$SBX/ax.yaml"
+  vdir="$AX_REPO/cmd/mc-axvalidate"; mkdir -p "$vdir"
+  cat > "$vdir/main.go" <<'GO'
+package main
+import ("fmt";"os";"github.com/google/ax/internal/config")
+func main(){ c,err:=config.LoadFromFile(os.Args[1]); if err!=nil{fmt.Println(err);os.Exit(1)}; if err:=c.Validate();err!=nil{fmt.Println(err);os.Exit(1)}; fmt.Println("ok") }
+GO
+  if ( cd "$AX_REPO" && go run ./cmd/mc-axvalidate "$SBX/ax.yaml" >/dev/null 2>&1 ); then
+    ok "ax: accepted by AX's real config.LoadFromFile+Validate (AX_REPO)"
+  else
+    bad "ax: REJECTED by AX's real config loader"
+  fi
+  rm -rf "$vdir"
+else
+  printf '  \033[33m..\033[0m   ax: real AX validation skipped (set AX_REPO=<google/ax checkout>, install go)\n'
+fi
 
 echo
 echo "validated: $PASS ok, $FAIL failed"
