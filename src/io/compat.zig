@@ -220,10 +220,43 @@ pub fn writeFileAtPathMode(path: []const u8, data: []const u8, mode: std.posix.m
     try f.setPermissions(getIo(), File.Permissions.fromMode(mode));
 }
 
+/// Resolve a bare command name (no '/') to an absolute path via $PATH, like
+/// execvp. Returns null if `name` already contains '/' or isn't found on PATH.
+fn resolveInPath(allocator: Allocator, name: []const u8) ?[]u8 {
+    if (std.mem.indexOfScalar(u8, name, '/') != null) return null;
+    const path_env = getEnvVar(allocator, "PATH") orelse return null;
+    defer allocator.free(path_env);
+    var it = std.mem.tokenizeScalar(u8, path_env, ':');
+    while (it.next()) |dir| {
+        const full = std.fs.path.join(allocator, &.{ dir, name }) catch continue;
+        if (accessAbsolute(full)) |_| return full else |_| allocator.free(full);
+    }
+    return null;
+}
+
 /// Spawn `argv` inheriting stdio, wait, and return its exit code (1 on signal).
 /// Replaces the old `std.process.execv` exec-replace with spawn+wait.
+///
+/// POSIX execve (and this std's `std.process.spawn`) do NOT search $PATH, so a
+/// bare argv[0] like "pi" fails with FileNotFound. Resolve it like execvp first.
 pub fn execReplace(argv: []const []const u8) !u8 {
-    var child = try std.process.spawn(getIo(), .{ .argv = argv });
+    const a = std.heap.page_allocator;
+    var spawn_argv = argv;
+    var owned0: ?[]u8 = null;
+    if (argv.len > 0) {
+        if (resolveInPath(a, argv[0])) |abs| {
+            owned0 = abs;
+            const buf = try a.alloc([]const u8, argv.len);
+            buf[0] = abs;
+            for (argv[1..], 1..) |x, i| buf[i] = x;
+            spawn_argv = buf;
+        }
+    }
+    defer if (owned0) |o| {
+        a.free(o);
+        a.free(spawn_argv);
+    };
+    var child = try std.process.spawn(getIo(), .{ .argv = spawn_argv });
     const term = try child.wait(getIo());
     return switch (term) {
         .exited => |code| code,
