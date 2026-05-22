@@ -90,10 +90,11 @@ fn printHelp() void {
         \\AGENT MANAGEMENT:
         \\  agent new <name> [--model M] [--provider P] [--toolset T]   Create a new agent
         \\  agent show <name>                          Show an agent's materialized file trace
-        \\  agent emit <name> [--target T] [--out D]   Emit native config for a managed-agent
-        \\                                             runtime (claude | openclaw | hermes | pi);
-        \\                                             --out D materializes all needed files
-        \\                                             (pi: D/.pi/agent/{models,settings}.json)
+        \\  agent emit <name> [--target T] [--out D]   Emit native config for a runtime:
+        \\                                             claude (Claude Code) | managed (Anthropic
+        \\                                             Managed Agents) | openclaw | hermes | pi |
+        \\                                             google (AX). --out D materializes all files
+        \\                                             (pi: D/.pi/agent/*; claude: D/.claude/*)
         \\
         \\AGENT EXECUTION:
         \\  run <agent> [--dry-run] [-- <pi args>]     Run a named agent

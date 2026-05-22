@@ -28,12 +28,12 @@ fn contains(h: []const u8, n: []const u8) bool {
     return std.mem.indexOf(u8, h, n) != null;
 }
 
-test "emitClaude: minimal body is valid JSON with core fields" {
+test "emitManaged: minimal body is valid JSON with core fields" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = try parse(arena.allocator(), BASE);
 
-    const json = try emit.emitClaude(arena.allocator(), a, "PROMPT BODY");
+    const json = try emit.emitManaged(arena.allocator(), a, "PROMPT BODY");
 
     // Re-parse to assert it is well-formed and structurally correct.
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
@@ -52,7 +52,7 @@ test "emitClaude: minimal body is valid JSON with core fields" {
     try std.testing.expectEqual(@as(usize, 1), o.get("skills").?.array.items.len);
 }
 
-test "emitClaude: speed produces a model object, mcp refs produce mcp_toolset tools" {
+test "emitManaged: speed produces a model object, mcp refs produce mcp_toolset tools" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const src =
@@ -67,7 +67,7 @@ test "emitClaude: speed produces a model object, mcp refs produce mcp_toolset to
         \\}
     ;
     const a = try parse(arena.allocator(), src);
-    const json = try emit.emitClaude(arena.allocator(), a, "unused");
+    const json = try emit.emitManaged(arena.allocator(), a, "unused");
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
     const o = v.object;
 
@@ -87,7 +87,7 @@ test "emitClaude: speed produces a model object, mcp refs produce mcp_toolset to
     try std.testing.expectEqualStrings("github", tools.items[2].object.get("mcp_server_name").?.string);
 }
 
-test "emitClaude: multiagent + metadata + targets passthrough merge" {
+test "emitManaged: multiagent + metadata + targets passthrough merge" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const src =
@@ -99,7 +99,7 @@ test "emitClaude: multiagent + metadata + targets passthrough merge" {
         \\  "multiagent": { "delegates": ["researcher", "tester"] },
         \\  "metadata": { "team": "infra" },
         \\  "targets": {
-        \\    "claude": {
+        \\    "managed": {
         \\      "model": "claude-sonnet-4-6",
         \\      "mcp_servers": [ { "type": "url", "name": "linear", "url": "https://mcp.linear.app/sse" } ]
         \\    }
@@ -107,7 +107,7 @@ test "emitClaude: multiagent + metadata + targets passthrough merge" {
         \\}
     ;
     const a = try parse(arena.allocator(), src);
-    const json = try emit.emitClaude(arena.allocator(), a, "unused");
+    const json = try emit.emitManaged(arena.allocator(), a, "unused");
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
     const o = v.object;
 
@@ -115,9 +115,9 @@ test "emitClaude: multiagent + metadata + targets passthrough merge" {
     try std.testing.expectEqual(@as(usize, 2), o.get("multiagent").?.object.get("agents").?.array.items.len);
     // metadata carried through.
     try std.testing.expectEqualStrings("infra", o.get("metadata").?.object.get("team").?.string);
-    // targets.claude.model OVERRIDES the canonical model.
+    // targets.managed.model OVERRIDES the canonical model.
     try std.testing.expectEqualStrings("claude-sonnet-4-6", o.get("model").?.string);
-    // targets.claude.mcp_servers added (a key the superset doesn't model itself).
+    // targets.managed.mcp_servers added (a key the superset doesn't model itself).
     try std.testing.expectEqual(@as(usize, 1), o.get("mcp_servers").?.array.items.len);
 }
 
@@ -217,14 +217,18 @@ test "emitOpenclaw: agent entry fields + tools + targets merge" {
 }
 
 test "parseTarget recognizes known runtimes" {
-    try std.testing.expectEqual(emit.Target.claude, emit.parseTarget("claude").?);
+    try std.testing.expectEqual(emit.Target.claude_code, emit.parseTarget("claude").?);
+    try std.testing.expectEqual(emit.Target.claude_code, emit.parseTarget("claude-code").?);
+    try std.testing.expectEqual(emit.Target.managed, emit.parseTarget("managed").?);
+    try std.testing.expectEqual(emit.Target.google, emit.parseTarget("google").?);
+    try std.testing.expectEqual(emit.Target.google, emit.parseTarget("ax").?);
     try std.testing.expectEqual(emit.Target.pi, emit.parseTarget("pi").?);
     try std.testing.expectEqual(emit.Target.openclaw, emit.parseTarget("openclaw").?);
     try std.testing.expectEqual(emit.Target.hermes, emit.parseTarget("hermes").?);
     try std.testing.expect(emit.parseTarget("nope") == null);
 }
 
-test "emitClaude: deep-merges nested target override and honors JSON null deletion" {
+test "emitManaged: deep-merges nested target override and honors JSON null deletion" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const src =
@@ -234,11 +238,11 @@ test "emitClaude: deep-merges nested target override and honors JSON null deleti
         \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
         \\  "env": { "required": [], "optional": [] },
         \\  "metadata": { "team": "infra", "tier": "gold" },
-        \\  "targets": { "claude": { "metadata": { "team": null, "org": "acme" }, "description": null } }
+        \\  "targets": { "managed": { "metadata": { "team": null, "org": "acme" }, "description": null } }
         \\}
     ;
     const a = try parse(arena.allocator(), src);
-    const json = try emit.emitClaude(arena.allocator(), a, "P");
+    const json = try emit.emitManaged(arena.allocator(), a, "P");
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
     const o = v.object;
 
@@ -251,7 +255,7 @@ test "emitClaude: deep-merges nested target override and honors JSON null deleti
     try std.testing.expectEqualStrings("acme", md.get("org").?.string);
 }
 
-test "emitClaude: mcp_servers definitions become url connectors + toolset refs; permissions become a policy" {
+test "emitManaged: mcp_servers definitions become url connectors + toolset refs; permissions become a policy" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const src =
@@ -268,7 +272,7 @@ test "emitClaude: mcp_servers definitions become url connectors + toolset refs; 
         \\}
     ;
     const a = try parse(arena.allocator(), src);
-    const json = try emit.emitClaude(arena.allocator(), a, "P");
+    const json = try emit.emitManaged(arena.allocator(), a, "P");
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
     const o = v.object;
 
@@ -308,7 +312,7 @@ test "warnings: claude flags dropped fields but not honored permissions" {
         \\}
     ;
     const a = try parse(arena.allocator(), src);
-    const warns = try emit.warnings(arena.allocator(), a, .claude);
+    const warns = try emit.warnings(arena.allocator(), a, .managed);
     try std.testing.expect(warnsContain(warns, "sandbox"));
     try std.testing.expect(warnsContain(warns, "tools.allow/deny"));
     try std.testing.expect(warnsContain(warns, "max_tokens"));
@@ -387,7 +391,7 @@ test "emitHermes: cloud sandbox backend is dropped with a warning" {
 
 // A golden test locks the exact Claude wire shape for a minimal agent, so an
 // accidental change to field order/structure is caught loudly.
-test "emitClaude: golden minimal body" {
+test "emitManaged: golden minimal body" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const src =
@@ -399,7 +403,7 @@ test "emitClaude: golden minimal body" {
         \\}
     ;
     const a = try parse(arena.allocator(), src);
-    const json = try emit.emitClaude(arena.allocator(), a, "You are g.");
+    const json = try emit.emitManaged(arena.allocator(), a, "You are g.");
     const golden =
         \\{
         \\  "name": "g",
@@ -464,6 +468,85 @@ test "emitPiModels: pins the exact provider + model id; never embeds the key" {
 
     const warns = try emit.warnings(arena.allocator(), a, .pi);
     try std.testing.expect(warnsContain(warns, "$LITELLM_KEY"));
+}
+
+test "emitClaudeCode: subagent frontmatter (model alias, tools) + prompt body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const src =
+        \\{
+        \\  "name": "rev", "description": "Reviews PRs", "model": "claude-opus-4-7",
+        \\  "provider": "anthropic", "thinking": "high", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "system": "Be a careful reviewer.",
+        \\  "tools": { "allow": ["Read", "Grep"] }
+        \\}
+    ;
+    const a = try parse(arena.allocator(), src);
+    const md = try emit.emitClaudeCode(arena.allocator(), a, "fallback");
+    try std.testing.expect(std.mem.startsWith(u8, md, "---\n"));
+    try std.testing.expect(contains(md, "name: rev\n"));
+    try std.testing.expect(contains(md, "description: Reviews PRs\n"));
+    try std.testing.expect(contains(md, "model: opus\n")); // claude-opus-4-7 → alias
+    try std.testing.expect(contains(md, "tools: Read, Grep\n"));
+    try std.testing.expect(contains(md, "\n---\n\nBe a careful reviewer.\n")); // body after frontmatter
+
+    // settings.json carries the model + tool permissions.
+    const settings = try emit.emitClaudeSettings(arena.allocator(), a);
+    const sv = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), settings, .{});
+    try std.testing.expectEqualStrings("opus", sv.object.get("model").?.string);
+    try std.testing.expectEqual(@as(usize, 2), sv.object.get("permissions").?.object.get("allow").?.array.items.len);
+}
+
+test "emitMcpJson: standard .mcp.json shape from mcp_servers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const src =
+        \\{
+        \\  "name": "a", "description": "d", "model": "m",
+        \\  "provider": "anthropic", "thinking": "off", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "mcp_servers": { "linear": { "url": "https://mcp.linear.app/sse" } }
+        \\}
+    ;
+    const a = try parse(arena.allocator(), src);
+    const mcp = (try emit.emitMcpJson(arena.allocator(), a)).?;
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), mcp, .{});
+    const srv = v.object.get("mcpServers").?.object.get("linear").?.object;
+    try std.testing.expectEqualStrings("https://mcp.linear.app/sse", srv.get("url").?.string);
+
+    // no mcp_servers → null
+    const none = try parse(arena.allocator(), BASE);
+    try std.testing.expect((try emit.emitMcpJson(arena.allocator(), none)) == null);
+}
+
+test "emitGoogleAx: gemini planner + registry entry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const src =
+        \\{
+        \\  "name": "weather", "description": "weather agent", "model": "gemini-3.5-flash",
+        \\  "provider": "google", "thinking": "off", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "system": "You answer weather questions.",
+        \\  "temperature": 0.2, "max_tokens": 2048
+        \\}
+    ;
+    const a = try parse(arena.allocator(), src);
+    const yaml = try emit.emitGoogleAx(arena.allocator(), a, "fb");
+    try std.testing.expect(contains(yaml, "planner:\n  type: \"gemini\"\n  gemini:\n    model: \"gemini-3.5-flash\""));
+    try std.testing.expect(contains(yaml, "system_prompt: \"You answer weather questions.\""));
+    try std.testing.expect(contains(yaml, "max_tokens: 2048"));
+    try std.testing.expect(contains(yaml, "remote_agents: ["));
+    try std.testing.expect(contains(yaml, "id: \"weather\""));
+
+    // gemini provider → no provider warning; a non-gemini provider warns.
+    try std.testing.expectEqual(@as(usize, 0), (try emit.warnings(arena.allocator(), a, .google)).len);
+    const claude_a = try parse(arena.allocator(), BASE); // provider anthropic
+    try std.testing.expect(warnsContain(try emit.warnings(arena.allocator(), claude_a, .google), "gemini-only"));
 }
 
 fn argvContains(argv: []const []const u8, needle: []const u8) bool {

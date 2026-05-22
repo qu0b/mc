@@ -20,13 +20,21 @@ const ObjectMap = std.json.ObjectMap;
 const Array = std.json.Array;
 const Agent = agent_schema.Agent;
 
-pub const Target = enum { claude, pi, openclaw, hermes };
+/// The runtimes mc can emit native config for.
+/// - `claude_code`  — Anthropic Claude Code (.claude/ subagent + settings + .mcp.json)
+/// - `managed`      — Anthropic Managed Agents API (agents.create body)
+/// - `openclaw`, `hermes`, `pi`
+/// - `google`       — Google AX (Agent eXecutor) ax.yaml
+pub const Target = enum { claude_code, managed, openclaw, hermes, pi, google };
 
 pub fn parseTarget(name: []const u8) ?Target {
-    if (std.mem.eql(u8, name, "claude")) return .claude;
-    if (std.mem.eql(u8, name, "pi")) return .pi;
-    if (std.mem.eql(u8, name, "openclaw")) return .openclaw;
-    if (std.mem.eql(u8, name, "hermes")) return .hermes;
+    const eq = std.mem.eql;
+    if (eq(u8, name, "claude") or eq(u8, name, "claude-code")) return .claude_code;
+    if (eq(u8, name, "managed") or eq(u8, name, "claude-managed") or eq(u8, name, "managed-agents")) return .managed;
+    if (eq(u8, name, "openclaw")) return .openclaw;
+    if (eq(u8, name, "hermes")) return .hermes;
+    if (eq(u8, name, "pi")) return .pi;
+    if (eq(u8, name, "google") or eq(u8, name, "ax")) return .google;
     return null;
 }
 
@@ -39,7 +47,7 @@ const HERMES_BACKENDS = [_][]const u8{ "local", "ssh", "docker", "singularity", 
 /// Build the `agents.create` request body for Anthropic's Managed Agents API.
 /// `prompt_text` is the resolved system prompt (used when `agent.system` is
 /// absent). Returns pretty-printed JSON owned by `allocator`.
-pub fn emitClaude(allocator: std.mem.Allocator, agent: Agent, prompt_text: []const u8) ![]u8 {
+pub fn emitManaged(allocator: std.mem.Allocator, agent: Agent, prompt_text: []const u8) ![]u8 {
     var obj = ObjectMap.init(allocator);
 
     try obj.put("name", .{ .string = agent.name });
@@ -118,8 +126,136 @@ pub fn emitClaude(allocator: std.mem.Allocator, agent: Agent, prompt_text: []con
 
     if (agent.metadata) |md| try obj.put("metadata", md);
 
-    try applyTarget(allocator, &obj, agent, "claude");
+    try applyTarget(allocator, &obj, agent, "managed");
     return std.json.Stringify.valueAlloc(allocator, Value{ .object = obj }, .{ .whitespace = .indent_2 });
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic Claude Code — a `.claude/agents/<name>.md` subagent definition.
+// ---------------------------------------------------------------------------
+
+/// Emit a Claude Code subagent file: YAML frontmatter (name, description,
+/// model, tools) + the system prompt as the markdown body. This is the unit
+/// Claude Code loads from `.claude/agents/`. `--out` also writes settings.json
+/// and .mcp.json (see the CLI). `prompt_text` is the system-prompt fallback.
+pub fn emitClaudeCode(allocator: std.mem.Allocator, agent: Agent, prompt_text: []const u8) ![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try buf.appendSlice(allocator, "---\n");
+    try buf.print(allocator, "name: {s}\n", .{agent.name});
+    if (agent.description.len > 0) try buf.print(allocator, "description: {s}\n", .{agent.description});
+    try buf.print(allocator, "model: {s}\n", .{claudeCodeModel(agent)});
+    // tools: an explicit allowlist if the agent narrows them; otherwise omit
+    // (Claude Code then grants the subagent all tools).
+    if (agent.tools) |t| if (t.allow.len > 0) {
+        try buf.appendSlice(allocator, "tools: ");
+        for (t.allow, 0..) |tool, i| {
+            if (i > 0) try buf.appendSlice(allocator, ", ");
+            try buf.appendSlice(allocator, tool);
+        }
+        try buf.append(allocator, '\n');
+    };
+    try buf.appendSlice(allocator, "---\n\n");
+
+    const sys = agent.system orelse prompt_text;
+    try buf.appendSlice(allocator, sys);
+    if (sys.len == 0 or sys[sys.len - 1] != '\n') try buf.append(allocator, '\n');
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Claude Code accepts a model alias (sonnet/opus/haiku/inherit) or a full id.
+/// Map common Anthropic model ids to their alias; pass anything else through.
+fn claudeCodeModel(agent: Agent) []const u8 {
+    const m = agent.model;
+    if (std.mem.indexOf(u8, m, "opus") != null) return "opus";
+    if (std.mem.indexOf(u8, m, "sonnet") != null) return "sonnet";
+    if (std.mem.indexOf(u8, m, "haiku") != null) return "haiku";
+    return m;
+}
+
+/// Claude Code `.claude/settings.json`: model + permissions + env. Used by the
+/// `--out` materialize path.
+pub fn emitClaudeSettings(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
+    var o = ObjectMap.init(allocator);
+    try o.put("model", .{ .string = claudeCodeModel(agent) });
+
+    if (agent.permissions) |p| {
+        var perm = ObjectMap.init(allocator);
+        if (agent.tools) |t| {
+            if (t.allow.len > 0) try perm.put("allow", try stringArray(allocator, t.allow));
+            if (t.deny.len > 0) try perm.put("deny", try stringArray(allocator, t.deny));
+        }
+        if (p.default) |d| {
+            // Claude Code default permission mode: map allow→bypass-ish? Keep the
+            // raw value under defaultMode for the operator to refine.
+            try perm.put("defaultMode", .{ .string = d });
+        }
+        try o.put("permissions", .{ .object = perm });
+    } else if (agent.tools) |t| {
+        var perm = ObjectMap.init(allocator);
+        if (t.allow.len > 0) try perm.put("allow", try stringArray(allocator, t.allow));
+        if (t.deny.len > 0) try perm.put("deny", try stringArray(allocator, t.deny));
+        try o.put("permissions", .{ .object = perm });
+    }
+
+    if (agent.env.vars) |v| if (v == .object) try o.put("env", v);
+
+    try applyTarget(allocator, &o, agent, "claude");
+    return std.json.Stringify.valueAlloc(allocator, Value{ .object = o }, .{ .whitespace = .indent_2 });
+}
+
+/// `.mcp.json` (Claude Code / standard MCP shape) from `mcp_servers`.
+/// Returns null when the agent declares no MCP servers.
+pub fn emitMcpJson(allocator: std.mem.Allocator, agent: Agent) !?[]u8 {
+    const defs = mcpServersMap(agent) orelse return null;
+    var servers = ObjectMap.init(allocator);
+    const names = try sortedKeys(allocator, defs);
+    for (names) |name| {
+        const dv = defs.get(name).?;
+        if (dv == .object) try servers.put(name, dv);
+    }
+    var root = ObjectMap.init(allocator);
+    try root.put("mcpServers", .{ .object = servers });
+    return try std.json.Stringify.valueAlloc(allocator, Value{ .object = root }, .{ .whitespace = .indent_2 });
+}
+
+// ---------------------------------------------------------------------------
+// Google AX (Agent eXecutor) — an `ax.yaml` fragment.
+// ---------------------------------------------------------------------------
+
+/// Build an AX `ax.yaml` fragment: the gemini planner (model + system prompt +
+/// sampling) plus a `registry.remote_agents[]` entry for this agent. AX agent
+/// *logic* (tools) is Python (google.adk) and is out of scope for config.
+pub fn emitGoogleAx(allocator: std.mem.Allocator, agent: Agent, prompt_text: []const u8) ![]u8 {
+    var gemini = ObjectMap.init(allocator);
+    try gemini.put("model", .{ .string = agent.model });
+    const sys = agent.system orelse prompt_text;
+    if (sys.len > 0) try gemini.put("system_prompt", .{ .string = sys });
+    if (agent.temperature) |t| try gemini.put("temperature", .{ .float = t });
+    if (agent.max_tokens) |mt| try gemini.put("max_tokens", .{ .integer = mt });
+
+    var planner = ObjectMap.init(allocator);
+    try planner.put("type", .{ .string = "gemini" });
+    try planner.put("gemini", .{ .object = gemini });
+
+    var entry = ObjectMap.init(allocator);
+    try entry.put("id", .{ .string = agent.name });
+    try entry.put("name", .{ .string = agent.name });
+    if (agent.description.len > 0) try entry.put("description", .{ .string = agent.description });
+    try entry.put("protocol", .{ .string = "axp" });
+    var remote = Array.init(allocator);
+    try remote.append(.{ .object = entry });
+    var registry = ObjectMap.init(allocator);
+    try registry.put("remote_agents", .{ .array = remote });
+
+    var root = ObjectMap.init(allocator);
+    try root.put("planner", .{ .object = planner });
+    try root.put("registry", .{ .object = registry });
+
+    try applyTarget(allocator, &root, agent, "google");
+
+    var buf: std.ArrayList(u8) = .empty;
+    try writeBlockObject(&buf, allocator, root, 0);
+    return buf.toOwnedSlice(allocator);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,14 +478,29 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
     const has_mcp = agent.mcp.len > 0 or agent.mcp_servers != null;
 
     switch (target) {
-        .claude => {
+        .managed => {
             if (sampling) try add(&w, allocator, "max_tokens/temperature/context_window apply per message at session level, not on the agent resource");
             if (creds) try add(&w, allocator, "base_url/api_key_env are Anthropic-managed and not part of the agent config");
-            if (agent.tools != null) try add(&w, allocator, "tools.allow/deny are not translated; use the typed tools[] via targets.claude.tools");
+            if (agent.tools != null) try add(&w, allocator, "tools.allow/deny are not translated; use the typed tools[] via targets.managed.tools");
             if (agent.sandbox != null) try add(&w, allocator, "sandbox belongs to the session environment, not the agent resource");
             if (agent.memory != null) try add(&w, allocator, "memory is configured via session memory stores, not the agent resource");
             if (agent.permissions) |p| if (p.rules != null) try add(&w, allocator, "permissions.rules (per-tool) aren't translated; only permissions.default maps to the toolset permission_policy");
             if (mcpHasStdio(agent)) try add(&w, allocator, "mcp_servers entries with 'command' (stdio) were omitted: Claude MCP connectors require a 'url'");
+        },
+        .claude_code => {
+            if (sampling) try add(&w, allocator, "max_tokens/temperature aren't part of a Claude Code subagent; they apply per request");
+            if (creds) try add(&w, allocator, "base_url/api_key_env aren't Claude Code config (auth is via the CLI / ANTHROPIC_API_KEY)");
+            if (agent.multiagent != null) try add(&w, allocator, "multiagent.delegates aren't represented in one subagent file — emit each delegate as its own .claude/agents/<name>.md");
+            if (agent.sandbox != null) try add(&w, allocator, "sandbox isn't a Claude Code concept; use permissions/hooks instead");
+            if (agent.memory != null) try add(&w, allocator, "memory maps to CLAUDE.md / memory, not the subagent file");
+        },
+        .google => {
+            if (!std.mem.eql(u8, agent.provider, "google") and !std.mem.eql(u8, agent.provider, "gemini"))
+                try add(&w, allocator, "AX's planner is gemini-only; provider should be google/gemini and model a gemini-* id");
+            if (has_mcp) try add(&w, allocator, "AX tools/MCP are Python (google.adk) code, not ax.yaml config — not emitted");
+            if (agent.tools != null) try add(&w, allocator, "tools.allow/deny aren't AX config; AX tools are Python functions");
+            if (agent.permissions != null) try add(&w, allocator, "permissions aren't part of ax.yaml (AX audits via its controller)");
+            if (agent.multiagent != null) try add(&w, allocator, "multiagent roster isn't emitted; register each agent under registry.remote_agents");
         },
         .openclaw => {
             if (has_mcp) try add(&w, allocator, "MCP is configured at OpenClaw's top-level mcp.servers, not per-agent; use targets.openclaw or the top-level config");

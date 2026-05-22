@@ -219,7 +219,7 @@ fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void
     const target_name = opts.target orelse agent_schema.effectiveRuntime(ag);
     const target = emit.parseTarget(target_name) orelse {
         render.err(&w, "Unknown target");
-        w.print(": '{s}' (expected: claude | openclaw | pi)\n", .{target_name});
+        w.print(": '{s}' (expected: claude | managed | openclaw | hermes | pi | google)\n", .{target_name});
         return;
     };
 
@@ -227,8 +227,9 @@ fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void
         try materializeTarget(allocator, &w, cwd, ag, target, out_arg, prompt_text);
     } else {
         switch (target) {
-            .claude => {
-                w.writeAll(try emit.emitClaude(allocator, ag, prompt_text));
+            .claude_code => w.writeAll(try emit.emitClaudeCode(allocator, ag, prompt_text)),
+            .managed => {
+                w.writeAll(try emit.emitManaged(allocator, ag, prompt_text));
                 w.writeAll("\n");
             },
             .openclaw => {
@@ -236,6 +237,7 @@ fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void
                 w.writeAll("\n");
             },
             .hermes => w.writeAll(try emit.emitHermes(allocator, ag, prompt_text)),
+            .google => w.writeAll(try emit.emitGoogleAx(allocator, ag, prompt_text)),
             .pi => {
                 // The pinned model config (no fuzzy --model). null = no key in
                 // shareable stdout; use `--out <dir>` to materialize a runnable
@@ -304,9 +306,25 @@ fn materializeTarget(
                 w.print("  Note: ${s} is unset, so no key was baked in — export it before running, or set it in pi auth\n", .{e});
             }
         },
-        .claude => try writeOne(allocator, w, out_dir, "agent.json", try emit.emitClaude(allocator, ag, prompt_text)),
+        .claude_code => {
+            const agents_dir = try std.fs.path.join(allocator, &.{ out_dir, ".claude", "agents" });
+            try compat.makePathAbsolute(agents_dir);
+            const md_path = try std.fs.path.join(allocator, &.{ agents_dir, try std.fmt.allocPrint(allocator, "{s}.md", .{ag.name}) });
+            try compat.writeFileAtPath(md_path, try emit.emitClaudeCode(allocator, ag, prompt_text));
+            const settings_path = try std.fs.path.join(allocator, &.{ out_dir, ".claude", "settings.json" });
+            try compat.writeFileAtPath(settings_path, try emit.emitClaudeSettings(allocator, ag));
+            render.success(w, "Wrote");
+            w.print(" Claude Code config to {s}/.claude/ (agents/{s}.md, settings.json)\n", .{ out_dir, ag.name });
+            if (try emit.emitMcpJson(allocator, ag)) |mcp| {
+                const mcp_path = try std.fs.path.join(allocator, &.{ out_dir, ".mcp.json" });
+                try compat.writeFileAtPath(mcp_path, mcp);
+                w.print("  + {s}/.mcp.json\n", .{out_dir});
+            }
+        },
+        .managed => try writeOne(allocator, w, out_dir, "agent.json", try emit.emitManaged(allocator, ag, prompt_text)),
         .openclaw => try writeOne(allocator, w, out_dir, "openclaw-agent.json", try emit.emitOpenclaw(allocator, ag, prompt_text)),
         .hermes => try writeOne(allocator, w, out_dir, "config.yaml", try emit.emitHermes(allocator, ag, prompt_text)),
+        .google => try writeOne(allocator, w, out_dir, "ax.yaml", try emit.emitGoogleAx(allocator, ag, prompt_text)),
     }
 }
 

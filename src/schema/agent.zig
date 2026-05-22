@@ -116,7 +116,7 @@ const PROVIDER_VALUES = [_][]const u8{
     "kimi",       "minimax",   "zai",
 };
 const THINKING_VALUES = [_][]const u8{ "off", "minimal", "low", "medium", "high", "xhigh" };
-const RUNTIME_VALUES = [_][]const u8{ "pi", "claude", "hermes", "openclaw" };
+const RUNTIME_VALUES = [_][]const u8{ "pi", "claude", "claude-code", "managed", "claude-managed", "hermes", "openclaw", "google", "ax" };
 const SPEED_VALUES = [_][]const u8{ "standard", "fast" };
 const NETWORK_VALUES = [_][]const u8{ "none", "restricted", "all" };
 const SANDBOX_BACKEND_VALUES = [_][]const u8{ "local", "docker", "ssh", "cloud", "anthropic", "modal", "daytona" };
