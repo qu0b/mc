@@ -9,6 +9,7 @@
   "env": { "required": [], "optional": [], "vars": { "LOG_LEVEL": "info" } },
   "system": "You review code carefully.",
   "speed": "fast",
+  "max_turns": 60,
   "permissions": { "default": "ask" },
   "tools": { "allow": ["Read", "Grep"], "deny": ["Bash"] },
   "mcp_servers": { "linear": { "url": "https://mcp.linear.app/sse" } },
@@ -17,7 +18,7 @@
   "targets": {
     "managed":  { "metadata": { "tier": "gold" } },
     "openclaw": { "default": true },
-    "hermes":   { "agent": { "max_turns": 90 } },
+    "hermes":   { "agent": { "verbose": true } },
     "google":   { "ate": { "endpoint": "https://ate.example" } },
     "pi":       { "providers": { "extra": { "api": "openai-chat-completions" } } }
   }

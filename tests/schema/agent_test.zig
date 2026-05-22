@@ -258,6 +258,7 @@ const VALID_SUPERSET =
     \\  "max_tokens": 8192,
     \\  "temperature": 0.2,
     \\  "context_window": 200000,
+    \\  "max_turns": 60,
     \\  "api_key_env": "ANTHROPIC_API_KEY",
     \\  "base_url": "https://api.anthropic.com",
     \\  "mcp": ["linear", "github"],
@@ -290,6 +291,7 @@ test "full superset agent parses every field" {
     try std.testing.expectEqual(@as(i64, 8192), a.max_tokens.?);
     try std.testing.expectApproxEqAbs(@as(f64, 0.2), a.temperature.?, 0.0001);
     try std.testing.expectEqual(@as(i64, 200000), a.context_window.?);
+    try std.testing.expectEqual(@as(i64, 60), a.max_turns.?);
     try std.testing.expectEqualStrings("ANTHROPIC_API_KEY", a.api_key_env.?);
     try std.testing.expectEqualStrings("https://api.anthropic.com", a.base_url.?);
 
@@ -376,4 +378,24 @@ test "unknown superset key is still reported (strict)" {
     ;
     _ = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
     try std.testing.expect(messagesContain(&d, "unknown key 'runtimes'"));
+}
+
+test "max_turns must be a positive integer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var d = diag.Diagnostics.init(std.testing.allocator);
+    defer d.deinit();
+
+    const src =
+        \\{
+        \\  "name": "x", "description": "x", "model": "m",
+        \\  "provider": "anthropic", "thinking": "off", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "max_turns": 0
+        \\}
+    ;
+    _ = try agent.parseAgent(arena.allocator(), "agent.json", src, &d);
+    try std.testing.expectEqual(@as(usize, 1), pathCount(&d, "max_turns"));
+    try std.testing.expect(messagesContain(&d, "positive integer"));
 }

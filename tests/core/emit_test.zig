@@ -362,7 +362,7 @@ test "emitHermes: maps model/agent/mcp/terminal/memory into config.yaml" {
         \\  "provider": "anthropic", "thinking": "high", "prompt": "p",
         \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
         \\  "env": { "required": [], "optional": [] },
-        \\  "max_tokens": 8192, "context_window": 200000,
+        \\  "max_tokens": 8192, "context_window": 200000, "max_turns": 60,
         \\  "mcp_servers": { "linear": { "url": "https://mcp.linear.app/sse" } },
         \\  "sandbox": { "backend": "docker", "image": "python:3.12" },
         \\  "memory": { "enabled": true }
@@ -373,7 +373,7 @@ test "emitHermes: maps model/agent/mcp/terminal/memory into config.yaml" {
     try std.testing.expect(contains(yaml, "model:\n  default: \"claude-opus-4-7\"\n  provider: \"anthropic\""));
     try std.testing.expect(contains(yaml, "max_tokens: 8192"));
     try std.testing.expect(contains(yaml, "context_length: 200000"));
-    try std.testing.expect(contains(yaml, "agent:\n  reasoning_effort: \"high\""));
+    try std.testing.expect(contains(yaml, "agent:\n  reasoning_effort: \"high\"\n  max_turns: 60"));
     try std.testing.expect(contains(yaml, "mcp_servers:\n  linear:\n    url: \"https://mcp.linear.app/sse\""));
     try std.testing.expect(contains(yaml, "terminal:\n  backend: \"docker\"\n  docker_image: \"python:3.12\""));
     try std.testing.expect(contains(yaml, "memory:\n  memory_enabled: true"));
@@ -396,6 +396,33 @@ test "emitHermes: cloud sandbox backend is dropped with a warning" {
     try std.testing.expect(!contains(yaml, "terminal:"));
     const warns = try emit.warnings(arena.allocator(), a, .hermes);
     try std.testing.expect(warnsContain(warns, "Hermes terminal backend"));
+}
+
+test "emitHermes: max_turns is omitted when unset; warns on non-hermes targets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // No max_turns set → Hermes agent block carries only reasoning_effort.
+    const a = try parse(arena.allocator(), BASE);
+    const yaml = try emit.emitHermes(arena.allocator(), a, "u");
+    try std.testing.expect(contains(yaml, "agent:\n  reasoning_effort:"));
+    try std.testing.expect(!contains(yaml, "max_turns"));
+    // No warning when the field is absent.
+    try std.testing.expect(!warnsContain(try emit.warnings(arena.allocator(), a, .pi), "max_turns"));
+
+    // With max_turns set, hermes maps it (no warning) but other targets warn.
+    const src =
+        \\{
+        \\  "name": "h", "description": "d", "model": "claude-opus-4-7",
+        \\  "provider": "anthropic", "thinking": "high", "prompt": "p",
+        \\  "capabilities": { "skills": [], "commands": [], "extensions": [], "toolset": "x" },
+        \\  "env": { "required": [], "optional": [] },
+        \\  "max_turns": 30
+        \\}
+    ;
+    const b = try parse(arena.allocator(), src);
+    try std.testing.expect(!warnsContain(try emit.warnings(arena.allocator(), b, .hermes), "max_turns"));
+    try std.testing.expect(warnsContain(try emit.warnings(arena.allocator(), b, .claude_code), "max_turns"));
+    try std.testing.expect(warnsContain(try emit.warnings(arena.allocator(), b, .pi), "max_turns"));
 }
 
 // A golden test locks the exact Claude wire shape for a minimal agent, so an

@@ -79,6 +79,8 @@ pub const Agent = struct {
     max_tokens: ?i64 = null,
     temperature: ?f64 = null,
     context_window: ?i64 = null,
+    /// Max tool-calling iterations per conversation turn (agent loop budget).
+    max_turns: ?i64 = null,
     /// Name of the env var holding the provider API key.
     api_key_env: ?[]const u8 = null,
     base_url: ?[]const u8 = null,
@@ -154,6 +156,22 @@ fn validateNonEmptyString(value: std.json.Value, diags: *diag.Diagnostics, file:
     if (value != .string) return;
     if (value.string.len == 0) {
         try diags.err(file, try diags.arena.allocator().dupe(u8, path), "must be non-empty", .{});
+    }
+}
+
+fn validatePositiveInt(value: std.json.Value, diags: *diag.Diagnostics, file: []const u8, path: []const u8) anyerror!void {
+    const n: i64 = switch (value) {
+        .integer => |i| i,
+        .float => |f| if (@floor(f) == f) @as(i64, @intFromFloat(f)) else return,
+        else => return,
+    };
+    if (n <= 0) {
+        try diags.err(
+            file,
+            try diags.arena.allocator().dupe(u8, path),
+            "must be a positive integer, got {d}",
+            .{n},
+        );
     }
 }
 
@@ -350,6 +368,7 @@ pub const AGENT_SCHEMA: []const json_strict.FieldSpec = &[_]json_strict.FieldSpe
     .{ .name = "max_tokens", .type = .integer },
     .{ .name = "temperature", .type = .number },
     .{ .name = "context_window", .type = .integer },
+    .{ .name = "max_turns", .type = .integer, .validate = validatePositiveInt },
     .{ .name = "api_key_env", .type = .string, .validate = validateEnvIdent },
     .{ .name = "base_url", .type = .string, .validate = validateNonEmptyString },
     .{ .name = "api", .type = .string, .validate = validateNonEmptyString },
@@ -506,6 +525,7 @@ pub fn parseAgent(
         .max_tokens = getInt(root, "max_tokens"),
         .temperature = getFloat(root, "temperature"),
         .context_window = getInt(root, "context_window"),
+        .max_turns = getInt(root, "max_turns"),
         .api_key_env = getString(root, "api_key_env"),
         .base_url = getString(root, "base_url"),
         .api = getString(root, "api"),

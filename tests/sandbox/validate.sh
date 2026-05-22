@@ -70,7 +70,8 @@ jq_has "$P" '.providers.anthropic.models[0].id=="claude-opus-4-7"' && ok "pi: pr
 jq_has "$M" '.metadata.tier=="gold" and .metadata.team=="infra"' && ok "passthrough: targets.managed deep-merged into metadata" || bad "passthrough: managed"
 jq_has "$O" '.default==true' && ok "passthrough: targets.openclaw added a key" || bad "passthrough: openclaw"
 jq_has "$P" '.providers.extra.api=="openai-chat-completions"' && ok "passthrough: targets.pi added a provider" || bad "passthrough: pi"
-[ "$(yaml_get "$H" "['agent']['max_turns']")" = "90" ] && ok "passthrough: targets.hermes merged into agent block" || bad "passthrough: hermes"
+[ "$(yaml_get "$H" "['agent']['verbose']")" = "True" ] && ok "passthrough: targets.hermes merged into agent block" || bad "passthrough: hermes"
+[ "$(yaml_get "$H" "['agent']['max_turns']")" = "60" ] && ok "hermes: first-class max_turns -> agent.max_turns" || bad "hermes: max_turns"
 [ "$(yaml_get "$G" "['ate']['endpoint']")" = "https://ate.example" ] && ok "passthrough: targets.google added ate block" || bad "passthrough: google"
 
 echo "=== fixture: pi-local.json (pi pinned config; --out without key) ==="

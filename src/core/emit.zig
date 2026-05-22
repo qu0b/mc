@@ -341,6 +341,8 @@ pub fn emitHermes(allocator: std.mem.Allocator, agent: Agent, prompt_text: []con
 
     var ag = ObjectMap.init(allocator);
     try ag.put("reasoning_effort", .{ .string = agent.thinking });
+    // agent.max_turns: tool-calling iteration budget per turn (config.py:510).
+    if (agent.max_turns) |mt| try ag.put("max_turns", .{ .integer = mt });
     try obj.put("agent", .{ .object = ag });
 
     // Hermes mcp_servers shape (command/args/env or url/headers) matches ours.
@@ -493,6 +495,11 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
     const sampling = agent.max_tokens != null or agent.temperature != null or agent.context_window != null;
     const creds = agent.base_url != null or agent.api_key_env != null;
     const has_mcp = agent.mcp.len > 0 or agent.mcp_servers != null;
+
+    // max_turns (agent loop budget) maps only to Hermes' agent.max_turns; warn
+    // for every other target so the field isn't silently dropped.
+    if (agent.max_turns != null and target != .hermes)
+        try add(&w, allocator, "max_turns has no first-class field on this target; it's only emitted to Hermes (agent.max_turns)");
 
     switch (target) {
         .managed => {
