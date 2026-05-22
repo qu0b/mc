@@ -535,6 +535,46 @@ test "emitClaudeCode: subagent frontmatter (model alias, tools) + prompt body" {
     try std.testing.expectEqual(@as(usize, 2), sv.object.get("permissions").?.object.get("allow").?.array.items.len);
 }
 
+test "emitClaudeSettings: permissions.default maps to a valid defaultMode enum" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // ask → "default"; always_allow → "bypassPermissions"; deny → omitted+warn.
+    const cases = [_]struct { policy: []const u8, mode: ?[]const u8 }{
+        .{ .policy = "ask", .mode = "default" },
+        .{ .policy = "always_allow", .mode = "bypassPermissions" },
+        .{ .policy = "deny", .mode = null },
+    };
+    inline for (cases) |c| {
+        const src = std.fmt.comptimePrint(
+            \\{{
+            \\  "name": "rev", "description": "d", "model": "claude-opus-4-7",
+            \\  "provider": "anthropic", "thinking": "high", "prompt": "p",
+            \\  "capabilities": {{ "skills": [], "commands": [], "extensions": [], "toolset": "x" }},
+            \\  "env": {{ "required": [], "optional": [] }},
+            \\  "permissions": {{ "default": "{s}" }}
+            \\}}
+        , .{c.policy});
+        const a = try parse(arena.allocator(), src);
+        const settings = try emit.emitClaudeSettings(arena.allocator(), a);
+        const sv = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), settings, .{});
+        const perm = sv.object.get("permissions").?.object;
+        if (c.mode) |want| {
+            try std.testing.expectEqualStrings(want, perm.get("defaultMode").?.string);
+        } else {
+            // "deny": no valid Claude Code defaultMode → omitted entirely.
+            try std.testing.expect(perm.get("defaultMode") == null);
+        }
+        // Whatever the policy, the raw superset token must never leak through.
+        try std.testing.expect(std.mem.indexOf(u8, settings, c.policy) == null);
+
+        // Only "deny" (the unmappable policy) is flagged in warnings().
+        const warns = try emit.warnings(arena.allocator(), a, .claude_code);
+        const flagged = warnsContain(warns, "no Claude Code defaultMode");
+        try std.testing.expectEqual(c.mode == null, flagged);
+    }
+}
+
 test "emitMcpJson: standard .mcp.json shape from mcp_servers" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

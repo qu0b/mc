@@ -56,6 +56,13 @@ M="$(emit "$N" managed)";  check "managed: well-formed"  json "$M"
 jq_has "$M" '.name=="reviewer" and (.model|type)=="object" and (.tools|length)>=1' && ok "managed: name+model{id,speed}+tools" || bad "managed: shape"
 C="$(emit "$N" claude)";   check "claude: subagent md"   md   "$C"
 grep -q '^name: reviewer$' <<<"$C" && grep -q '^model: opus$' <<<"$C" && ok "claude: frontmatter name+model alias" || bad "claude: frontmatter"
+# permissions.default "ask" must become a VALID Claude Code defaultMode enum
+# ("default"), never the raw superset token.
+OUTC="$SBX/out-claude"; ( cd "$SBX" && "$MC" agent emit "$N" --target claude --out "$OUTC" >/dev/null 2>&1 )
+CS="$(cat "$OUTC/.claude/settings.json" 2>/dev/null)"
+jq_has "$CS" '.permissions.defaultMode=="default"' && ! grep -q '"ask"' <<<"$CS" \
+  && ok "claude --out: permissions.default ask -> defaultMode \"default\" (valid enum)" \
+  || bad "claude --out: defaultMode mapping"
 O="$(emit "$N" openclaw)"; check "openclaw: well-formed" json "$O"
 jq_has "$O" '.id=="reviewer" and .thinkingDefault=="high"' && ok "openclaw: id+thinkingDefault" || bad "openclaw: shape"
 H="$(emit "$N" hermes)";   check "hermes: well-formed"   yaml "$H"

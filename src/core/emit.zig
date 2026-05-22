@@ -172,6 +172,19 @@ fn claudeCodeModel(agent: Agent) []const u8 {
     return m;
 }
 
+/// Map the abstract cross-runtime permission policy (always_allow|ask|deny) to
+/// a valid Claude Code `permissions.defaultMode` value. Claude Code's enum is
+/// `default | acceptEdits | plan | bypassPermissions` (documented basis: the
+/// `--permission-mode` flag, see Hermes' claude-code SKILL.md:279). `deny` has
+/// no "deny all" mode — denial is expressed via `permissions.deny` — so it
+/// maps to null (the caller omits defaultMode and warnings() flags it).
+fn claudeCodeDefaultMode(policy: []const u8) ?[]const u8 {
+    const eq = std.mem.eql;
+    if (eq(u8, policy, "ask")) return "default";
+    if (eq(u8, policy, "always_allow")) return "bypassPermissions";
+    return null; // "deny": no equivalent default mode
+}
+
 /// Claude Code `.claude/settings.json`: model + permissions + env. Used by the
 /// `--out` materialize path.
 pub fn emitClaudeSettings(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
@@ -185,9 +198,11 @@ pub fn emitClaudeSettings(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
             if (t.deny.len > 0) try perm.put("deny", try stringArray(allocator, t.deny));
         }
         if (p.default) |d| {
-            // Claude Code default permission mode: map allow→bypass-ish? Keep the
-            // raw value under defaultMode for the operator to refine.
-            try perm.put("defaultMode", .{ .string = d });
+            // The superset policy (always_allow|ask|deny) is abstract; Claude
+            // Code's permissions.defaultMode is a closed enum
+            // (default|acceptEdits|plan|bypassPermissions). Map to a *valid*
+            // mode — never write the raw superset token, which Claude rejects.
+            if (claudeCodeDefaultMode(d)) |mode| try perm.put("defaultMode", .{ .string = mode });
         }
         try o.put("permissions", .{ .object = perm });
     } else if (agent.tools) |t| {
@@ -515,6 +530,10 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
             if (sampling) try add(&w, allocator, "max_tokens/temperature aren't part of a Claude Code subagent; they apply per request");
             if (creds) try add(&w, allocator, "base_url/api_key_env aren't Claude Code config (auth is via the CLI / ANTHROPIC_API_KEY)");
             if (agent.multiagent != null) try add(&w, allocator, "multiagent.delegates aren't represented in one subagent file — emit each delegate as its own .claude/agents/<name>.md");
+            if (agent.permissions) |p| if (p.default) |d| {
+                if (claudeCodeDefaultMode(d) == null)
+                    try add(&w, allocator, "permissions.default \"deny\" has no Claude Code defaultMode (enum: default|acceptEdits|plan|bypassPermissions); express denial via permissions.deny");
+            };
             if (agent.sandbox != null) try add(&w, allocator, "sandbox isn't a Claude Code concept; use permissions/hooks instead");
             if (agent.memory != null) try add(&w, allocator, "memory maps to CLAUDE.md / memory, not the subagent file");
         },
