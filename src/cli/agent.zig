@@ -223,39 +223,99 @@ fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void
         return;
     };
 
-    switch (target) {
-        .claude => {
-            const out = try emit.emitClaude(allocator, ag, prompt_text);
-            w.writeAll(out);
-            w.writeAll("\n");
-        },
-        .openclaw => {
-            const out = try emit.emitOpenclaw(allocator, ag, prompt_text);
-            w.writeAll(out);
-            w.writeAll("\n");
-        },
-        .hermes => {
-            const out = try emit.emitHermes(allocator, ag, prompt_text);
-            w.writeAll(out);
-        },
-        .pi => {
-            // The "proper model config": a pi models.json that pins the exact
-            // provider + model (no fuzzy --model matching). `mc run` uses this.
-            const out = try emit.emitPiModels(allocator, ag);
-            w.writeAll(out);
-            w.writeAll("\n");
-        },
+    if (opts.out) |out_arg| {
+        try materializeTarget(allocator, &w, cwd, ag, target, out_arg, prompt_text);
+    } else {
+        switch (target) {
+            .claude => {
+                w.writeAll(try emit.emitClaude(allocator, ag, prompt_text));
+                w.writeAll("\n");
+            },
+            .openclaw => {
+                w.writeAll(try emit.emitOpenclaw(allocator, ag, prompt_text));
+                w.writeAll("\n");
+            },
+            .hermes => w.writeAll(try emit.emitHermes(allocator, ag, prompt_text)),
+            .pi => {
+                // The pinned model config (no fuzzy --model). null = no key in
+                // shareable stdout; use `--out <dir>` to materialize a runnable
+                // ~/.pi with the key injected from api_key_env.
+                w.writeAll(try emit.emitPiModels(allocator, ag, null));
+                w.writeAll("\n");
+            },
+        }
     }
 
     // Surface any superset fields that the chosen target does not represent,
-    // on stderr so stdout stays clean for piping.
-    const warns = try emit.warnings(allocator, ag, target);
+    // on stderr so stdout stays clean for piping. In --out mode the
+    // per-file notes from materializeTarget are authoritative (and accurate
+    // about the key), so we don't also print the generic warnings there.
+    const warns = if (opts.out == null) try emit.warnings(allocator, ag, target) else &[_][]const u8{};
     if (warns.len > 0) {
         w.flush();
         var ew = compat.getStderr();
         for (warns) |msg| ew.print("warning [{s}]: {s}\n", .{ target_name, msg });
         ew.flush();
     }
+}
+
+/// Materialize EVERYTHING the target runtime needs into `out_arg`, instead of
+/// printing one config. For pi this is the full `<out>/.pi/agent/` set
+/// (models.json + settings.json), so launching is just `HOME=<out> pi …`.
+fn materializeTarget(
+    allocator: std.mem.Allocator,
+    w: *compat.OutWriter,
+    cwd: []const u8,
+    ag: agent_schema.Agent,
+    target: emit.Target,
+    out_arg: []const u8,
+    prompt_text: []const u8,
+) !void {
+    const out_dir = if (std.fs.path.isAbsolute(out_arg))
+        try allocator.dupe(u8, out_arg)
+    else
+        try std.fs.path.join(allocator, &.{ cwd, out_arg });
+
+    switch (target) {
+        .pi => {
+            const agent_dir = try std.fs.path.join(allocator, &.{ out_dir, ".pi", "agent" });
+            try compat.makePathAbsolute(agent_dir);
+
+            // Inject the key from the operator's environment only if the named
+            // var is actually set; the file is then written 0600.
+            const key: ?[]const u8 = if (ag.api_key_env) |e| compat.getEnvVar(allocator, e) else null;
+            const models = try emit.emitPiModels(allocator, ag, key);
+            const models_path = try std.fs.path.join(allocator, &.{ agent_dir, "models.json" });
+            if (key != null)
+                try compat.writeFileAtPathMode(models_path, models, 0o600)
+            else
+                try compat.writeFileAtPath(models_path, models);
+
+            const settings = try emit.emitPiSettings(allocator, ag);
+            const settings_path = try std.fs.path.join(allocator, &.{ agent_dir, "settings.json" });
+            try compat.writeFileAtPath(settings_path, settings);
+
+            render.success(w, "Wrote");
+            w.print(" pi config to {s}/.pi/agent/ (models.json, settings.json)\n", .{out_dir});
+            w.print("  Run: HOME={s} pi -p \"...\"\n", .{out_dir});
+            if (key != null) {
+                w.print("  Note: models.json contains the {s} key (mode 600) — do not commit {s}\n", .{ ag.api_key_env.?, out_dir });
+            } else if (ag.api_key_env) |e| {
+                w.print("  Note: ${s} is unset, so no key was baked in — export it before running, or set it in pi auth\n", .{e});
+            }
+        },
+        .claude => try writeOne(allocator, w, out_dir, "agent.json", try emit.emitClaude(allocator, ag, prompt_text)),
+        .openclaw => try writeOne(allocator, w, out_dir, "openclaw-agent.json", try emit.emitOpenclaw(allocator, ag, prompt_text)),
+        .hermes => try writeOne(allocator, w, out_dir, "config.yaml", try emit.emitHermes(allocator, ag, prompt_text)),
+    }
+}
+
+fn writeOne(allocator: std.mem.Allocator, w: *compat.OutWriter, out_dir: []const u8, name: []const u8, data: []const u8) !void {
+    try compat.makePathAbsolute(out_dir);
+    const path = try std.fs.path.join(allocator, &.{ out_dir, name });
+    try compat.writeFileAtPath(path, data);
+    render.success(w, "Wrote");
+    w.print(" {s}/{s}\n", .{ out_dir, name });
 }
 
 // ============================================================

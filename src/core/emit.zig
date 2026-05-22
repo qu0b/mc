@@ -274,11 +274,12 @@ pub fn emitPiArgv(
     return list.toOwnedSlice(allocator);
 }
 
-/// Build a pi `~/.pi/agent/models.json` fragment that defines `agent.provider`
-/// with the **exact** `agent.model` id, so pi doesn't fuzzy-match the wrong
-/// variant or collide with a built-in provider name. The API key is NOT
-/// embedded — supply it from `api_key_env` at run time (or via pi's auth).
-pub fn emitPiModels(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
+/// Build a pi `~/.pi/agent/models.json` that defines `agent.provider` with the
+/// **exact** `agent.model` id, so pi doesn't fuzzy-match the wrong variant or
+/// collide with a built-in provider name. `api_key` is embedded only when
+/// non-null (the materialize path injects it from `api_key_env`); pass null to
+/// keep the secret out of shareable output.
+pub fn emitPiModels(allocator: std.mem.Allocator, agent: Agent, api_key: ?[]const u8) ![]u8 {
     var model = ObjectMap.init(allocator);
     try model.put("id", .{ .string = agent.model });
     try model.put("name", .{ .string = agent.model });
@@ -302,6 +303,7 @@ pub fn emitPiModels(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
     var prov = ObjectMap.init(allocator);
     if (agent.base_url) |b| try prov.put("baseUrl", .{ .string = b });
     if (agent.api) |a| try prov.put("api", .{ .string = a });
+    if (api_key) |k| try prov.put("apiKey", .{ .string = k });
     try prov.put("models", .{ .array = models });
 
     var providers = ObjectMap.init(allocator);
@@ -310,6 +312,20 @@ pub fn emitPiModels(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
     var root = ObjectMap.init(allocator);
     try root.put("providers", .{ .object = providers });
     return std.json.Stringify.valueAlloc(allocator, Value{ .object = root }, .{ .whitespace = .indent_2 });
+}
+
+/// Build a pi `~/.pi/agent/settings.json` pinning the agent's provider, model,
+/// and thinking level as defaults — so `pi` launches against the exact model
+/// without any `--provider` / `--model` flags (no fuzzy resolution).
+pub fn emitPiSettings(allocator: std.mem.Allocator, agent: Agent) ![]u8 {
+    var o = ObjectMap.init(allocator);
+    try o.put("defaultProvider", .{ .string = agent.provider });
+    try o.put("defaultModel", .{ .string = agent.model });
+    try o.put("defaultThinkingLevel", .{ .string = agent.thinking });
+    var enabled = Array.init(allocator);
+    try enabled.append(.{ .string = agent.model });
+    try o.put("enabledModels", .{ .array = enabled });
+    return std.json.Stringify.valueAlloc(allocator, Value{ .object = o }, .{ .whitespace = .indent_2 });
 }
 
 // ---------------------------------------------------------------------------

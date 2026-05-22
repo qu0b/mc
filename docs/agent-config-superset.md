@@ -118,22 +118,42 @@ the goal named are implemented:
 - **openclaw** — `openclaw.json` `agents.list[]` entry (JSON). ✅
 - **hermes** — `config.yaml` fragment (YAML, via a small JSON-value→YAML writer);
   maps model/`reasoning_effort`/`mcp_servers`/`terminal`/`memory`. ✅
-- **pi** — `pi` argv (`emitPiArgv`; the locked-down loadout `mc run` builds). ✅
+- **pi** — a `~/.pi/agent` config that **pins the exact provider + model id**:
+  `models.json` (`emitPiModels` — `providers.<name>.{baseUrl,api,models:[{id,…}]}`)
+  and `settings.json` (`emitPiSettings` — `defaultProvider/defaultModel/
+  defaultThinkingLevel`). This avoids pi's fuzzy `--model` resolution picking the
+  wrong variant or colliding with a built-in provider name. `emitPiArgv` still
+  builds the locked-down argv loadout. ✅
 
-Every emitter builds a `std.json.Value` tree and **deep-merges** the matching
+Every JSON emitter builds a `std.json.Value` tree and **deep-merges** the matching
 `targets.<runtime>` object over it (RFC 7386), so even nested runtime-specific
 overrides work without schema changes. `warnings(agent, target)` reports any set
 field the target can't represent.
 
+### Providers are open
+
+`provider` is **not** a closed enum — it accepts any lowercase slug (e.g. a
+self-hosted gateway named `local-llm`) and only *warns* when the name isn't a
+built-in. The `api` field (wire protocol, e.g. `anthropic-messages`) and
+`reasoning` flag let an emitter pin a complete provider definition.
+
 ## CLI
 
 ```
-mc agent emit <name> [--target claude|openclaw|pi]
+mc agent emit <name> [--target claude|openclaw|hermes|pi] [--out <dir>]
 ```
 
 Loads `agents/<name>/agent.json`, resolves the target (defaults to the agent's
-`runtime`), and prints the native config. `--target pi` points to
-`mc run <name> --dry-run`, which prints the full materialized pi command.
+`runtime`), and **prints** the native config to stdout (warnings → stderr).
+
+With **`--out <dir>`** it instead *materializes every file the target needs*:
+
+- **pi** → `<dir>/.pi/agent/models.json` + `settings.json`, so launching is just
+  `HOME=<dir> pi -p "…"` (no `--provider`/`--model` flags, no fuzzy match). If the
+  env var named by `api_key_env` is set, its value is injected into `models.json`
+  (written mode `0600`); otherwise the key is left out with a note.
+- **claude/openclaw/hermes** → the single config file (`agent.json` /
+  `openclaw-agent.json` / `config.yaml`).
 
 Validate the config layer in isolation (no filesystem) with:
 

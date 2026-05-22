@@ -201,6 +201,25 @@ pub fn hasEnvVar(name: []const u8) bool {
     return std.c.getenv(buf[0..name.len :0]) != null;
 }
 
+/// Read env var `name`'s value (owned by `allocator`); null if unset.
+pub fn getEnvVar(allocator: Allocator, name: []const u8) ?[]const u8 {
+    var buf: [256]u8 = undefined;
+    if (name.len >= buf.len) return null;
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;
+    const v = std.c.getenv(buf[0..name.len :0]) orelse return null;
+    return allocator.dupe(u8, std.mem.sliceTo(v, 0)) catch null;
+}
+
+/// Write `data` to absolute `path` with explicit POSIX mode (e.g. 0o600 for
+/// files that contain secrets). Creates the file; sets perms after writing.
+pub fn writeFileAtPathMode(path: []const u8, data: []const u8, mode: std.posix.mode_t) !void {
+    try Dir.cwd().writeFile(getIo(), .{ .sub_path = path, .data = data });
+    var f = try Dir.cwd().openFile(getIo(), path, .{ .mode = .read_write });
+    defer f.close(getIo());
+    try f.setPermissions(getIo(), File.Permissions.fromMode(mode));
+}
+
 /// Spawn `argv` inheriting stdio, wait, and return its exit code (1 on signal).
 /// Replaces the old `std.process.execv` exec-replace with spawn+wait.
 pub fn execReplace(argv: []const []const u8) !u8 {

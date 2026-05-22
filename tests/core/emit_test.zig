@@ -432,22 +432,36 @@ test "emitPiModels: pins the exact provider + model id; never embeds the key" {
         \\}
     ;
     const a = try parse(arena.allocator(), src); // local-llm warns but parses
-    const json = try emit.emitPiModels(arena.allocator(), a);
-    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
 
+    // Shareable form (no key): exact provider/model pinned, secret absent.
+    const json = try emit.emitPiModels(arena.allocator(), a, null);
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json, .{});
     const prov = v.object.get("providers").?.object.get("local-llm").?.object;
     try std.testing.expectEqualStrings("https://ai.starflinger.eu", prov.get("baseUrl").?.string);
     try std.testing.expectEqualStrings("anthropic-messages", prov.get("api").?.string);
-
     const m = prov.get("models").?.array.items[0].object;
     try std.testing.expectEqualStrings("minimax-m2.7", m.get("id").?.string); // exact, not fuzzy
     try std.testing.expectEqual(@as(i64, 196608), m.get("contextWindow").?.integer);
     try std.testing.expectEqual(@as(i64, 64000), m.get("maxTokens").?.integer);
     try std.testing.expectEqual(true, m.get("reasoning").?.bool);
-
-    // The secret is never embedded — only referenced via warnings.
-    try std.testing.expect(std.mem.indexOf(u8, json, "apiKey") == null);
+    try std.testing.expect(prov.get("apiKey") == null);
     try std.testing.expect(std.mem.indexOf(u8, json, "LITELLM_KEY") == null);
+
+    // Materialize form (key injected): apiKey present, exactly the value given.
+    const json_key = try emit.emitPiModels(arena.allocator(), a, "sk-secret-123");
+    const vk = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), json_key, .{});
+    try std.testing.expectEqualStrings(
+        "sk-secret-123",
+        vk.object.get("providers").?.object.get("local-llm").?.object.get("apiKey").?.string,
+    );
+
+    // settings.json pins defaults so pi needs no --provider/--model flags.
+    const settings = try emit.emitPiSettings(arena.allocator(), a);
+    const sv = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), settings, .{});
+    try std.testing.expectEqualStrings("local-llm", sv.object.get("defaultProvider").?.string);
+    try std.testing.expectEqualStrings("minimax-m2.7", sv.object.get("defaultModel").?.string);
+    try std.testing.expectEqualStrings("off", sv.object.get("defaultThinkingLevel").?.string);
+
     const warns = try emit.warnings(arena.allocator(), a, .pi);
     try std.testing.expect(warnsContain(warns, "$LITELLM_KEY"));
 }

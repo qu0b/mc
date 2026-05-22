@@ -135,8 +135,11 @@ pub const AgentShowOpts = struct {
 
 pub const AgentEmitOpts = struct {
     name: []const u8,
-    /// Target runtime: claude | openclaw | pi. Null → the agent's `runtime`.
+    /// Target runtime: claude | openclaw | hermes | pi. Null → the agent's `runtime`.
     target: ?[]const u8 = null,
+    /// When set, materialize ALL files the target needs into this directory
+    /// instead of printing the primary config to stdout.
+    out: ?[]const u8 = null,
 };
 
 pub fn parse(args_iter: anytype) !Command {
@@ -272,6 +275,8 @@ fn parseAgent(args_iter: anytype) !Command {
         while (args_iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "--target") or std.mem.eql(u8, arg, "-t")) {
                 opts.target = args_iter.next();
+            } else if (std.mem.eql(u8, arg, "--out") or std.mem.eql(u8, arg, "-o")) {
+                opts.out = args_iter.next();
             }
         }
         return .{ .agent = .{ .emit = opts } };
