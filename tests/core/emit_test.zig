@@ -199,7 +199,8 @@ test "emitOpenclaw: agent entry fields + tools + targets merge" {
         \\  "capabilities": { "skills": ["review"], "commands": [], "extensions": [], "toolset": "x" },
         \\  "env": { "required": [], "optional": [] },
         \\  "tools": { "allow": ["read", "grep"], "deny": ["bash"] },
-        \\  "sandbox": { "backend": "docker", "workdir": "/workspace" },
+        \\  "sandbox": { "backend": "docker", "workdir": "/workspace", "image": "node:22" },
+        \\  "context_window": 200000, "max_tokens": 8192, "temperature": 0.3,
         \\  "targets": { "openclaw": { "default": true } }
         \\}
     ;
@@ -212,8 +213,16 @@ test "emitOpenclaw: agent entry fields + tools + targets merge" {
     try std.testing.expectEqualStrings("PROMPT", o.get("systemPromptOverride").?.string);
     try std.testing.expectEqualStrings("medium", o.get("thinkingDefault").?.string);
     try std.testing.expectEqual(@as(usize, 2), o.get("tools").?.object.get("allow").?.array.items.len);
+    // verified-against-zod fields: contextTokens, sandbox.docker.image, params
+    try std.testing.expectEqual(@as(i64, 200000), o.get("contextTokens").?.integer);
     try std.testing.expectEqualStrings("docker", o.get("sandbox").?.object.get("backend").?.string);
+    try std.testing.expectEqualStrings("node:22", o.get("sandbox").?.object.get("docker").?.object.get("image").?.string);
+    try std.testing.expectEqual(@as(i64, 8192), o.get("params").?.object.get("max_tokens").?.integer);
     try std.testing.expectEqual(true, o.get("default").?.bool); // targets.openclaw merged
+
+    // sampling is now translated → no "not auto-translated" warning for openclaw
+    const warns = try emit.warnings(arena.allocator(), a, .openclaw);
+    try std.testing.expect(!warnsContain(warns, "not auto-translated"));
 }
 
 test "parseTarget recognizes known runtimes" {

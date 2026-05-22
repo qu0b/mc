@@ -277,6 +277,15 @@ pub fn emitOpenclaw(allocator: std.mem.Allocator, agent: Agent, prompt_text: []c
     // thinking levels line up with OpenClaw's thinkingDefault enum.
     try obj.put("thinkingDefault", .{ .string = agent.thinking });
     if (agent.speed) |sp| try obj.put("fastModeDefault", .{ .bool = std.mem.eql(u8, sp, "fast") });
+    if (agent.context_window) |c| try obj.put("contextTokens", .{ .integer = c });
+
+    // Sampling knobs ride OpenClaw's free-form provider `params` record.
+    if (agent.max_tokens != null or agent.temperature != null) {
+        var params = ObjectMap.init(allocator);
+        if (agent.max_tokens) |mt| try params.put("max_tokens", .{ .integer = mt });
+        if (agent.temperature) |t| try params.put("temperature", .{ .float = t });
+        try obj.put("params", .{ .object = params });
+    }
 
     if (agent.capabilities.skills.len > 0)
         try obj.put("skills", try stringArray(allocator, agent.capabilities.skills));
@@ -292,6 +301,12 @@ pub fn emitOpenclaw(allocator: std.mem.Allocator, agent: Agent, prompt_text: []c
         var so = ObjectMap.init(allocator);
         try so.put("backend", .{ .string = backend });
         if (sb.workdir) |wd| try so.put("workspaceRoot", .{ .string = wd });
+        // Container image lives under sandbox.docker.image in OpenClaw.
+        if (sb.image) |img| {
+            var docker = ObjectMap.init(allocator);
+            try docker.put("image", .{ .string = img });
+            try so.put("docker", .{ .object = docker });
+        }
         try obj.put("sandbox", .{ .object = so });
     };
 
@@ -508,7 +523,6 @@ pub fn warnings(allocator: std.mem.Allocator, agent: Agent, target: Target) ![]c
             if (has_mcp) try add(&w, allocator, "MCP is configured at OpenClaw's top-level mcp.servers, not per-agent; use targets.openclaw or the top-level config");
             if (agent.permissions != null) try add(&w, allocator, "permissions are not auto-translated to OpenClaw (it uses tools policy / approvals)");
             if (agent.memory != null) try add(&w, allocator, "memory is not auto-translated to OpenClaw (top-level memory / agent memorySearch)");
-            if (sampling) try add(&w, allocator, "max_tokens/temperature/context_window map to OpenClaw provider/model params; not auto-translated");
             if (creds) try add(&w, allocator, "base_url/api_key_env are configured under OpenClaw models.providers; not auto-translated");
             if (agent.metadata != null) try add(&w, allocator, "metadata has no OpenClaw agent-entry field; not emitted");
         },
