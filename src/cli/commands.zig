@@ -38,6 +38,8 @@ pub fn runWithArgs(allocator: std.mem.Allocator, argv: []const []const u8) !void
             .agent_name = opts.agent_name,
             .dry_run = opts.dry_run,
             .extra_args = opts.extra_args,
+            .file = opts.file,
+            .print_argv = opts.print_argv,
         }),
         .version => printVersion(),
         .help => printHelp(),

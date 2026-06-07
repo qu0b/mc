@@ -188,18 +188,33 @@ fn executeEmit(allocator: std.mem.Allocator, opts: args_mod.AgentEmitOpts) !void
 
     const cwd = try compat.getCwdAlloc(allocator);
 
-    const marker = try std.fmt.allocPrint(allocator, "{s}/.mc/mc.json", .{cwd});
-    compat.accessAbsolute(marker) catch {
-        render.err(&w, "Not an mc project");
-        w.writeAll(". Run 'mc init' first.\n");
-        return;
-    };
+    // Resolve where the agent.json lives and where its prompt resolves from.
+    // Standalone (`--file <path>`): skip the `.mc` sandbox marker entirely and
+    // read the lone agent.json directly; the prompt resolves relative to the
+    // file's own dir. Sandbox mode: require `.mc/mc.json` and resolve
+    // agents/<name>/agent.json by name.
+    var agent_dir: []const u8 = undefined;
+    var agent_json_path: []const u8 = undefined;
+    if (opts.file) |file_arg| {
+        agent_json_path = if (std.fs.path.isAbsolute(file_arg))
+            try allocator.dupe(u8, file_arg)
+        else
+            try std.fs.path.join(allocator, &.{ cwd, file_arg });
+        agent_dir = try allocator.dupe(u8, std.fs.path.dirname(agent_json_path) orelse cwd);
+    } else {
+        const marker = try std.fmt.allocPrint(allocator, "{s}/.mc/mc.json", .{cwd});
+        compat.accessAbsolute(marker) catch {
+            render.err(&w, "Not an mc project");
+            w.writeAll(". Run 'mc init' first.\n");
+            return;
+        };
+        agent_dir = try std.fmt.allocPrint(allocator, "{s}/agents/{s}", .{ cwd, opts.name });
+        agent_json_path = try std.fmt.allocPrint(allocator, "{s}/agent.json", .{agent_dir});
+    }
 
-    const agent_dir = try std.fmt.allocPrint(allocator, "{s}/agents/{s}", .{ cwd, opts.name });
-    const agent_json_path = try std.fmt.allocPrint(allocator, "{s}/agent.json", .{agent_dir});
     const src = compat.readFile(allocator, agent_json_path) catch {
         render.err(&w, "Agent not found");
-        w.print(": agents/{s}/agent.json\n", .{opts.name});
+        w.print(": {s}\n", .{agent_json_path});
         return;
     };
 

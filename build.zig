@@ -425,6 +425,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_validate_cli_tests = b.addRunArtifact(validate_cli_tests);
 
+    // ---- Phase 12: agent-config superset emitters ----
+    // (declared before cli/run so the run module can import the single argv
+    // builder `emit.emitPiArgv`.)
+    const emit_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/emit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "agent", .module = agent_schema_mod },
+        },
+    });
+
     // ---- Phase 8: cli/run ----
     const run_cmd_mod = b.createModule(.{
         .root_source_file = b.path("src/cli/run.zig"),
@@ -438,6 +450,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "toolset_resolver", .module = toolset_resolver_mod },
             .{ .name = "materialize", .module = materialize_mod },
             .{ .name = "iocompat", .module = iocompat_mod },
+            .{ .name = "emit", .module = emit_mod },
         },
     });
     const run_cmd_tests = b.addTest(.{
@@ -454,15 +467,6 @@ pub fn build(b: *std.Build) void {
     });
     const run_run_cmd_tests = b.addRunArtifact(run_cmd_tests);
 
-    // ---- Phase 12: agent-config superset emitters ----
-    const emit_mod = b.createModule(.{
-        .root_source_file = b.path("src/core/emit.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "agent", .module = agent_schema_mod },
-        },
-    });
     const emit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/core/emit_test.zig"),

@@ -129,19 +129,25 @@ test "clean project: buildCommand produces well-formed argv" {
     const tools_idx = find(cmd.argv, "--tools") orelse return error.NoToolsFlag;
     try std.testing.expectEqualStrings("Edit,Read,Glob", cmd.argv[tools_idx + 1]);
 
-    // --no-skills and --no-extensions always present.
-    try std.testing.expect(find(cmd.argv, "--no-skills") != null);
+    // pi 0.73: --mode json, --no-session, --no-extensions always present.
+    const mode_idx = find(cmd.argv, "--mode") orelse return error.NoModeFlag;
+    try std.testing.expectEqualStrings("json", cmd.argv[mode_idx + 1]);
+    try std.testing.expect(find(cmd.argv, "--no-session") != null);
     try std.testing.expect(find(cmd.argv, "--no-extensions") != null);
 
-    // Two capabilities (cap-a, cap-b) ⇒ two --skill entries.
+    // Two capabilities (cap-a, cap-b) ⇒ two --skill entries AND no --no-skills
+    // (pi would otherwise ignore the --skill dirs).
     try std.testing.expectEqual(@as(usize, 2), countOccurrences(cmd.argv, "--skill"));
+    try std.testing.expect(find(cmd.argv, "--no-skills") == null);
 
-    // Prompt content round-trips.
+    // System prompt content round-trips.
     try std.testing.expectEqualStrings("You are a helpful agent.\n", cmd.prompt);
 
-    // Prompt appears as an arg right after -p.
-    const p_idx = find(cmd.argv, "-p") orelse return error.NoPromptFlag;
-    try std.testing.expectEqualStrings("You are a helpful agent.\n", cmd.argv[p_idx + 1]);
+    // -p is a BOOLEAN; the system prompt moves to --system-prompt as its value.
+    const p_idx = find(cmd.argv, "-p") orelse return error.NoPrintFlag;
+    try std.testing.expect(!std.mem.eql(u8, cmd.argv[p_idx + 1], "You are a helpful agent.\n"));
+    const sp_idx = find(cmd.argv, "--system-prompt") orelse return error.NoSystemPromptFlag;
+    try std.testing.expectEqualStrings("You are a helpful agent.\n", cmd.argv[sp_idx + 1]);
 
     // No missing env, no diagnostics.
     try std.testing.expectEqual(@as(usize, 0), cmd.missing_env.len);
@@ -331,6 +337,121 @@ test "extra_args: pass-through appears at tail of argv" {
     try std.testing.expect(cmd.argv.len >= 2);
     try std.testing.expectEqualStrings("--thinking", cmd.argv[cmd.argv.len - 2]);
     try std.testing.expectEqualStrings("high", cmd.argv[cmd.argv.len - 1]);
+}
+
+test "standalone --file: builds pi argv from a lone agent.json (no .mc sandbox)" {
+    const ally = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // A lone agent dir: agent.json + prompt.md + a sibling toolsets.json +
+    // a pre-staged skill dir. No `.mc/mc.json`.
+    const standalone_agent =
+        \\{
+        \\  "name": "solo",
+        \\  "description": "standalone",
+        \\  "model": "minimax-m2.7",
+        \\  "provider": "local-llm",
+        \\  "thinking": "medium",
+        \\  "prompt": "./prompt.md",
+        \\  "api": "anthropic-messages",
+        \\  "capabilities": {
+        \\    "skills": ["review"],
+        \\    "commands": [],
+        \\    "extensions": [],
+        \\    "toolset": "edit"
+        \\  },
+        \\  "env": { "required": [], "optional": [] }
+        \\}
+    ;
+    try testutil.writeRel(tmp.dir, "lone/agent.json", standalone_agent);
+    try testutil.writeRel(tmp.dir, "lone/prompt.md", "SYS PROMPT\n");
+    try testutil.writeRel(tmp.dir, "lone/toolsets.json", TOOLSETS);
+    try testutil.writeRel(tmp.dir, "lone/review/SKILL.md", "# review\n");
+
+    const root = try testutil.realRoot(ally, &tmp);
+    defer ally.free(root);
+    const file_abs = try std.fs.path.join(ally, &.{ root, "lone", "agent.json" });
+    defer ally.free(file_abs);
+
+    var diags = diag.Diagnostics.init(ally);
+    defer diags.deinit();
+    var env = std.StringHashMap([]const u8).init(ally);
+    defer env.deinit();
+
+    // project_root is irrelevant in --file mode; pass the tmp root.
+    var cmd = try run.buildCommand(
+        ally,
+        root,
+        .{ .agent_name = "", .file = file_abs },
+        &diags,
+        &env,
+    );
+    defer cmd.deinit();
+
+    try std.testing.expectEqualStrings("pi", cmd.argv[0]);
+    // Toolset resolved via the sibling toolsets.json ("edit" ⇒ Edit,Read,Glob).
+    const tools_idx = find(cmd.argv, "--tools") orelse return error.NoToolsFlag;
+    try std.testing.expectEqualStrings("Edit,Read,Glob", cmd.argv[tools_idx + 1]);
+    // System prompt from prompt.md (resolved relative to the file's dir).
+    const sp_idx = find(cmd.argv, "--system-prompt") orelse return error.NoSystemPromptFlag;
+    try std.testing.expectEqualStrings("SYS PROMPT\n", cmd.argv[sp_idx + 1]);
+    // Pre-staged skill dir handed to --skill (relative resolved to file dir),
+    // so --no-skills must be absent.
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(cmd.argv, "--skill"));
+    try std.testing.expect(find(cmd.argv, "--no-skills") == null);
+    const skill_idx = find(cmd.argv, "--skill").?;
+    try std.testing.expect(std.mem.endsWith(u8, cmd.argv[skill_idx + 1], "lone/review"));
+}
+
+test "standalone --file: no sibling toolsets.json ⇒ toolset name is the resolved tool id" {
+    const ally = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const standalone_agent =
+        \\{
+        \\  "name": "solo",
+        \\  "description": "standalone",
+        \\  "model": "m",
+        \\  "provider": "local-llm",
+        \\  "thinking": "off",
+        \\  "prompt": "./prompt.md",
+        \\  "capabilities": {
+        \\    "skills": [],
+        \\    "commands": [],
+        \\    "extensions": [],
+        \\    "toolset": "read"
+        \\  },
+        \\  "env": { "required": [], "optional": [] }
+        \\}
+    ;
+    try testutil.writeRel(tmp.dir, "lone/agent.json", standalone_agent);
+    try testutil.writeRel(tmp.dir, "lone/prompt.md", "P\n");
+
+    const root = try testutil.realRoot(ally, &tmp);
+    defer ally.free(root);
+    const file_abs = try std.fs.path.join(ally, &.{ root, "lone", "agent.json" });
+    defer ally.free(file_abs);
+
+    var diags = diag.Diagnostics.init(ally);
+    defer diags.deinit();
+    var env = std.StringHashMap([]const u8).init(ally);
+    defer env.deinit();
+
+    var cmd = try run.buildCommand(
+        ally,
+        root,
+        .{ .agent_name = "", .file = file_abs },
+        &diags,
+        &env,
+    );
+    defer cmd.deinit();
+
+    // No registry ⇒ capabilities.toolset is treated as a pre-resolved id.
+    const tools_idx = find(cmd.argv, "--tools") orelse return error.NoToolsFlag;
+    try std.testing.expectEqualStrings("read", cmd.argv[tools_idx + 1]);
+    try std.testing.expect(find(cmd.argv, "--no-skills") != null);
 }
 
 test "dry-run render: printDryRun produces argv-shaped output with PROMPT placeholder" {

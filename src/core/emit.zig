@@ -357,9 +357,23 @@ pub fn emitHermes(allocator: std.mem.Allocator, agent: Agent, prompt_text: []con
 // Pi — the `pi …` command line.
 // ---------------------------------------------------------------------------
 
-/// Build the `pi` argv. `tools` is the resolved tool-ID list (joined to CSV);
-/// `skill_dirs` are absolute paths to materialized skill directories. Mirrors
-/// the explicit, locked-down loadout `mc run` has always produced.
+/// Build the `pi` argv to the verified pi 0.73 invocation. `tools` is the
+/// resolved tool-ID list (joined to CSV); `skill_dirs` are absolute paths to
+/// materialized (or pre-staged) skill directories. `prompt_text` is the
+/// resolved SYSTEM prompt (prompt.md contents); `agent.system`, when set,
+/// overrides it. `extra` carries the trailing positional(s) — the task is the
+/// last positional `@<taskfile>` (pi expands `@file` ONLY in the positional).
+///
+/// pi 0.73 shape:
+///   pi -p --system-prompt <TEXT> --provider <p> --model <m> --thinking <lvl>
+///      [--max-tokens N] --tools <csv> --mode json --no-session --no-extensions
+///      [--no-builtin-tools] [--no-skills | --skill <dir> ...] [<task positional>]
+///
+/// `-p` / `--print` is a BOOLEAN (non-interactive). `--system-prompt` REPLACES
+/// pi's default prompt and is a single literal argv element (array exec, no
+/// shell → no quoting/base64). `--no-skills` is emitted ONLY when zero skills
+/// are attached, else one `--skill <dir>` per skill (pi ignores `--skill` when
+/// `--no-skills` is present).
 pub fn emitPiArgv(
     allocator: std.mem.Allocator,
     agent: Agent,
@@ -371,13 +385,13 @@ pub fn emitPiArgv(
     var list: std.ArrayList([]const u8) = .empty;
 
     try list.append(allocator, "pi");
+    // -p / --print is a BOOLEAN in pi 0.73 (no value follows).
     try list.append(allocator, "-p");
-    try list.append(allocator, prompt_text);
 
-    if (agent.system) |sys| {
-        try list.append(allocator, "--system-prompt");
-        try list.append(allocator, sys);
-    }
+    // The system prompt: agent.system overrides the prompt.md fallback.
+    // --system-prompt REPLACES pi's default and is a single literal argv elem.
+    try list.append(allocator, "--system-prompt");
+    try list.append(allocator, agent.system orelse prompt_text);
 
     try list.append(allocator, "--provider");
     try list.append(allocator, agent.provider);
@@ -394,18 +408,27 @@ pub fn emitPiArgv(
     try list.append(allocator, "--tools");
     try list.append(allocator, try joinCSV(allocator, tools));
 
-    // Explicit loadout: never auto-load other skills/extensions.
-    try list.append(allocator, "--no-skills");
+    // JSONL output for the recorder/pi-harness, ephemeral session, explicit
+    // loadout (never auto-load extensions).
+    try list.append(allocator, "--mode");
+    try list.append(allocator, "json");
+    try list.append(allocator, "--no-session");
     try list.append(allocator, "--no-extensions");
     if (agent.tools) |t| if (t.builtin) |b| if (!b) {
         try list.append(allocator, "--no-builtin-tools");
     };
 
-    for (skill_dirs) |dir| {
-        try list.append(allocator, "--skill");
-        try list.append(allocator, dir);
+    if (skill_dirs.len == 0) {
+        // --no-skills ONLY when zero skills are attached.
+        try list.append(allocator, "--no-skills");
+    } else {
+        for (skill_dirs) |dir| {
+            try list.append(allocator, "--skill");
+            try list.append(allocator, dir);
+        }
     }
 
+    // Trailing positional(s): the task @<taskfile> goes last.
     for (extra) |e| try list.append(allocator, e);
 
     return list.toOwnedSlice(allocator);

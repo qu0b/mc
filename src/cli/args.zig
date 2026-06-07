@@ -38,8 +38,15 @@ pub const ValidateOpts = struct {
 pub const RunOpts = struct {
     agent_name: []const u8,
     dry_run: bool = false,
-    /// Args collected after `--`, passed through to `pi`.
+    /// Args collected after `--`, passed through to `pi` (the trailing
+    /// positional task `@<taskfile>` goes here).
     extra_args: []const []const u8 = &.{},
+    /// Standalone mode: load the agent from this lone agent.json (no `.mc`
+    /// sandbox). When set, `agent_name` is informational only.
+    file: ?[]const u8 = null,
+    /// Print the exact pi argv (one element per line, raw — NOT shell-quoted)
+    /// and exit, so an external runner can exec the array verbatim.
+    print_argv: bool = false,
 };
 
 pub const InitOpts = struct {
@@ -134,12 +141,17 @@ pub const AgentShowOpts = struct {
 };
 
 pub const AgentEmitOpts = struct {
+    /// Agent slug under `agents/<name>/` (sandbox mode). May be empty when
+    /// `--file` is given (standalone mode).
     name: []const u8,
     /// Target runtime: claude | openclaw | hermes | pi. Null → the agent's `runtime`.
     target: ?[]const u8 = null,
     /// When set, materialize ALL files the target needs into this directory
     /// instead of printing the primary config to stdout.
     out: ?[]const u8 = null,
+    /// Standalone mode: read the agent.json directly from this path (no `.mc`
+    /// sandbox, prompt resolved relative to the file's dir).
+    file: ?[]const u8 = null,
 };
 
 pub fn parse(args_iter: anytype) !Command {
@@ -270,15 +282,23 @@ fn parseAgent(args_iter: anytype) !Command {
         const name = args_iter.next() orelse return error.MissingArgument;
         return .{ .agent = .{ .show = .{ .name = name } } };
     } else if (std.mem.eql(u8, sub, "emit")) {
-        const name = args_iter.next() orelse return error.MissingArgument;
-        var opts = AgentEmitOpts{ .name = name };
+        // Collect remaining so the positional NAME is optional when --file is given.
+        var opts = AgentEmitOpts{ .name = "" };
+        var name: ?[]const u8 = null;
         while (args_iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "--target") or std.mem.eql(u8, arg, "-t")) {
                 opts.target = args_iter.next();
             } else if (std.mem.eql(u8, arg, "--out") or std.mem.eql(u8, arg, "-o")) {
                 opts.out = args_iter.next();
+            } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
+                opts.file = args_iter.next();
+            } else if (!std.mem.startsWith(u8, arg, "-") and name == null) {
+                name = arg;
             }
         }
+        if (name) |n| opts.name = n;
+        // A name is required unless --file points at a standalone agent.json.
+        if (opts.file == null and opts.name.len == 0) return error.MissingArgument;
         return .{ .agent = .{ .emit = opts } };
     }
 
@@ -295,6 +315,8 @@ fn parseRun(args_iter: anytype) !Command {
 
     var name: ?[]const u8 = null;
     var dry_run = false;
+    var print_argv = false;
+    var file: ?[]const u8 = null;
     var extra: []const []const u8 = &.{};
 
     var i: usize = 0;
@@ -305,16 +327,24 @@ fn parseRun(args_iter: anytype) !Command {
             break;
         } else if (std.mem.eql(u8, arg, "--dry-run")) {
             dry_run = true;
+        } else if (std.mem.eql(u8, arg, "--print-argv")) {
+            print_argv = true;
+        } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
+            i += 1;
+            if (i < items.len) file = items[i];
         } else if (!std.mem.startsWith(u8, arg, "-") and name == null) {
             name = arg;
         }
     }
 
-    const agent_name = name orelse return error.MissingArgument;
+    // A positional name is required unless --file supplies a standalone agent.
+    const agent_name = name orelse (if (file != null) "" else return error.MissingArgument);
     return .{ .run = .{
         .agent_name = agent_name,
         .dry_run = dry_run,
         .extra_args = extra,
+        .file = file,
+        .print_argv = print_argv,
     } };
 }
 

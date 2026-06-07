@@ -143,22 +143,28 @@ test "emitPiArgv: faithful loadout + system prompt + skill dirs" {
         &.{"--offline"},
     );
 
+    // pi 0.73: argv[0]=pi, argv[1]=-p (BOOLEAN, no value follows), then the
+    // system prompt goes to --system-prompt as its own literal element.
     try std.testing.expectEqualStrings("pi", argv[0]);
     try std.testing.expectEqualStrings("-p", argv[1]);
-    try std.testing.expectEqualStrings("do the thing", argv[2]);
+    try std.testing.expectEqualStrings("--system-prompt", argv[2]);
+    try std.testing.expectEqualStrings("Be terse.", argv[3]); // agent.system wins
 
-    try std.testing.expect(argvContains(argv, "--system-prompt"));
-    try std.testing.expect(argvContains(argv, "Be terse."));
     try std.testing.expect(argvContains(argv, "--provider"));
     try std.testing.expect(argvContains(argv, "openrouter"));
     try std.testing.expect(argvContains(argv, "--model"));
     try std.testing.expect(argvContains(argv, "claude-haiku-4.5"));
     try std.testing.expect(argvContains(argv, "--thinking"));
     try std.testing.expect(argvContains(argv, "read,grep"));
-    try std.testing.expect(argvContains(argv, "--no-skills"));
+    // --mode json + --no-session are now required.
+    try std.testing.expect(argvAdjacent(argv, "--mode", "json"));
+    try std.testing.expect(argvContains(argv, "--no-session"));
     try std.testing.expect(argvContains(argv, "--no-extensions"));
+    // Skills attached ⇒ --no-skills must be ABSENT (pi would ignore --skill).
+    try std.testing.expect(!argvContains(argv, "--no-skills"));
     try std.testing.expect(argvContains(argv, "/rt/reviewer/skill-b"));
-    try std.testing.expect(argvContains(argv, "--offline"));
+    // The task is the trailing positional.
+    try std.testing.expectEqualStrings("--offline", argv[argv.len - 1]);
 }
 
 test "emitPiArgv: tools.builtin=false adds --no-builtin-tools and max_tokens flows through" {
@@ -179,14 +185,20 @@ test "emitPiArgv: tools.builtin=false adds --no-builtin-tools and max_tokens flo
     try std.testing.expect(argvContains(argv, "--no-builtin-tools"));
     try std.testing.expect(argvContains(argv, "--max-tokens"));
     try std.testing.expect(argvContains(argv, "2048"));
+    // No skills ⇒ --no-skills IS present.
+    try std.testing.expect(argvContains(argv, "--no-skills"));
 }
 
-test "emitPiArgv: no system flag when system absent" {
+test "emitPiArgv: system-prompt always present; falls back to prompt_text when agent.system unset" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const a = try parse(arena.allocator(), BASE);
-    const argv = try emit.emitPiArgv(arena.allocator(), a, &.{"read"}, &.{}, "msg", &.{});
-    try std.testing.expect(!argvContains(argv, "--system-prompt"));
+    const a = try parse(arena.allocator(), BASE); // no `system`
+    const argv = try emit.emitPiArgv(arena.allocator(), a, &.{"read"}, &.{}, "the system prompt body", &.{});
+    // --system-prompt REPLACES pi's default; with no agent.system it carries
+    // the prompt.md fallback text as a single literal argv element.
+    try std.testing.expect(argvAdjacent(argv, "--system-prompt", "the system prompt body"));
+    // No skills attached ⇒ --no-skills present.
+    try std.testing.expect(argvContains(argv, "--no-skills"));
 }
 
 test "emitOpenclaw: agent entry fields + tools + targets merge" {
@@ -554,6 +566,15 @@ test "emitGoogleAx: gemini planner + registry entry" {
 
 fn argvContains(argv: []const []const u8, needle: []const u8) bool {
     for (argv) |a| if (std.mem.eql(u8, a, needle)) return true;
+    return false;
+}
+
+/// True when `flag` appears immediately followed by `value`.
+fn argvAdjacent(argv: []const []const u8, flag: []const u8, value: []const u8) bool {
+    var i: usize = 0;
+    while (i + 1 < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], flag) and std.mem.eql(u8, argv[i + 1], value)) return true;
+    }
     return false;
 }
 

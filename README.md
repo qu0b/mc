@@ -53,9 +53,20 @@ mc agent emit reviewer --target openclaw   # → OpenClaw agents.list[] entry
 mc agent emit reviewer --target hermes     # → Hermes config.yaml
 mc agent emit reviewer --target google     # → Google AX ax.yaml
 mc agent emit reviewer --target pi --out d # → materialize d/.pi/agent/{models,settings}.json
-mc run reviewer --dry-run          # preview the pi command for this agent
+mc agent emit --file a.json --target pi --out d  # standalone: lone agent.json, no .mc sandbox
+mc run reviewer --dry-run          # preview the pi command (masks the system prompt)
+mc run reviewer --print-argv -- @task.md  # machine-readable pi argv (one elem/line) for a runner
+mc run --file a.json --print-argv -- @task.md  # standalone run from a lone agent.json
 mc validate                        # validate every config file + cross-references
 ```
+
+The non-interactive surfaces (`--file` / `--print-argv`) let an external runner
+drive pi from a single `agent.json` with no `.mc` sandbox: `--print-argv` emits
+the exact pi argv (one element per line, raw — the runner execs the array
+verbatim), and `--file` resolves the toolset from a sibling `toolsets.json` and
+points pi at PRE-STAGED skill dirs (no package manager). The pi 0.73 invocation
+is: `pi -p --system-prompt <TEXT> --provider local-llm --model <M> --tools <csv>
+--mode json --no-session --no-extensions [--no-skills | --skill <dir> …] @<taskfile>`.
 
 `mc agent emit` prints native config to **stdout** (clean, pipeable) and any
 "this field isn't representable on that runtime" **warnings to stderr**. The

@@ -123,7 +123,18 @@ are implemented:
   `terminal`/`memory`. ✅
 - **pi** — a `~/.pi/agent` config that **pins the exact provider + model id**:
   `models.json` (`emitPiModels`) and `settings.json` (`emitPiSettings`), avoiding
-  pi's fuzzy `--model` resolution. `emitPiArgv` still builds the argv loadout. ✅
+  pi's fuzzy `--model` resolution. `emitPiArgv` is the **single** argv builder
+  (`mc run` routes through it, no divergence) and emits the verified pi 0.73
+  invocation:
+  `pi -p --system-prompt <TEXT> --provider local-llm --model <M> --thinking <lvl>
+  --tools <csv> --mode json --no-session --no-extensions [--no-skills | --skill
+  <dir> …] @<taskfile>`.
+  `-p` / `--print` is a **boolean** (non-interactive); the system prompt is a
+  single literal `--system-prompt` argv element (array exec, no shell → no
+  base64/quoting); `--no-skills` is emitted **only** when zero skills are attached
+  (else one `--skill <dir>` per skill); the task is the trailing positional
+  `@<taskfile>` (pi expands `@file` only in the positional). MCP is a Phase-1
+  no-op (warning only, never wired). ✅
 - **google** — Google **AX** (`Agent eXecutor`) `ax.yaml`: a gemini `planner`
   (model/`system_prompt`/sampling) + a `registry.remote_agents[]` entry. ✅
 
@@ -143,10 +154,29 @@ built-in. The `api` field (wire protocol, e.g. `anthropic-messages`) and
 
 ```
 mc agent emit <name> [--target claude|openclaw|hermes|pi] [--out <dir>]
+mc agent emit --file <agent.json> --target pi --out <dir>   # standalone, no .mc sandbox
+mc run <name> --print-argv -- @<taskfile>                   # machine-readable pi argv
+mc run --file <agent.json> --print-argv -- @<taskfile>      # standalone run
 ```
 
 Loads `agents/<name>/agent.json`, resolves the target (defaults to the agent's
 `runtime`), and **prints** the native config to stdout (warnings → stderr).
+
+### Standalone / non-interactive surfaces
+
+`--file <agent.json>` reads a **lone** `agent.json` with no `.mc` sandbox (the
+prompt resolves relative to the file's dir; the toolset resolves from a sibling
+`toolsets.json`, or — when absent — `capabilities.toolset` is treated as a single
+pre-resolved tool id). Skills/extensions are **pre-staged** dirs handed straight
+to `--skill` (absolute verbatim, relative resolved against the file's dir) — mc
+never invokes a package manager in this mode.
+
+`mc run --print-argv` prints the exact pi argv, **one element per line, raw**
+(NOT shell-quoted, NOT masked), so an external runner can exec the array
+verbatim — faithfulness (including the full `--system-prompt` text) wins over
+copy-paste safety. `--dry-run` is the human surface: it shell-quotes and masks
+the `--system-prompt` value as `<PROMPT>`. The task is supplied as the trailing
+positional after `--` (e.g. `-- @/workspace/.pi-task.md`).
 
 With **`--out <dir>`** it instead *materializes every file the target needs*:
 
